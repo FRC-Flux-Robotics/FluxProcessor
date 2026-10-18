@@ -1,2 +1,40 @@
-# FluxProcessor
-Experimental logs/audio/video post-match processing
+# FluxProcessor — FRC Team 10413 (FLUX Robotics)
+
+Automated post-match and post-practice log, multi-headset voice (`Driver` / `Operator` / `Coach`), and video (`YouTube` / local `.mp4`) analyzer for **FRC Team 10413 (FLUX Robotics)**.
+
+Works **out of the box with zero modifications to existing robot code** (`New_Robot/`).
+
+---
+
+## Features (v0.1)
+
+1. **Zero-Dependency Pure-Java `.wpilog` Binary Parser & Multi-Bus Merger (`merged.wpilog`)**
+   - Reads RoboRIO (`_rio.wpilog`), Drivetrain CANivore (`_drive.wpilog`), and Mechanism CANivore (`_mech.wpilog`) logs (and automatically converts raw CTRE Phoenix 6 `.hoot` files via `owlet` when present).
+   - Writes a unified `merged.wpilog` combining `/Rio/*`, `/DriveBus/*`, `/MechBus/*`, `/VoiceNotes/*`, and `/FluxAudit/*` so you open **1 single file** in AdvantageScope.
+
+2. **Named Battery Internal Resistance ($R_{\text{int}}$) & Brownout Audit**
+   - Estimates battery internal resistance ($R_{\text{int}} = -\Delta V / \Delta I$ in $\text{m}\Omega$) under acceleration load, tracks minimum battery voltage, brownout duration ($< 7.0\text{ V}$ warning, $< 6.8\text{ V}$ critical), and mid-match enable dropouts, and updates `batteries-health.csv`.
+
+3. **4-Corner Swerve Symmetry & Mechanism Health Check**
+   - Compares Front-Left (`FL`), Front-Right (`FR`), Back-Left (`BL`), and Back-Right (`BR`) drive and steer motor currents and velocities against the 4-corner median to catch rubbing brakes, worn bearings, or current-limit mismatches early.
+   - Audits all mechanisms (`Intake`, `Feeder`, `Indexer`, `Shooter Left/Right`, `Hood`, `Tilter`) and detects every discrete **Shot / Feed Event**.
+
+4. **Multi-Headset Voice Feedback (6-Second Lookback) & Video Jump-Links**
+   - Correlates spoken comments from `Driver`, `Operator`, and `Coach` tracks (`voice-notes.txt`, `audio-driver.txt`, `audio-operator.txt`, `audio-coach.txt`) with the preceding 6-second sensor window ($[t - 6.0\text{s} .. t]$) and links every event to a timestamped YouTube or local `.mp4` video clip.
+
+5. **1-Page Browser Report (`report.html`) & Season Leaderboard (`runs-index.html`)**
+   - Styled in official **Pelham FLUX Robotics (`pelhamroboticsteam.org`)** brand colors (`#212020` Charcoal Black, `#254BA0` Pelham Royal Blue, `#2B7BFF` FLUX Electric Blue, `Space Grotesk` font).
+
+---
+
+## Quick Start
+
+### Build & Run Unit Tests (Offline-Ready, Zero External Dependencies)
+```bash
+./scripts/build.sh
+```
+
+### Analyze a Folder of Matches / Practice Sessions
+```bash
+java -jar build/libs/flux-processor.jar <path/to/match-logs> --out ./output
+```
