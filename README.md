@@ -34,7 +34,31 @@ Works **out of the box with zero modifications to existing robot code** (`New_Ro
 ./scripts/build.sh
 ```
 
-### Analyze a Folder of Matches / Practice Sessions
+### Analyze a Folder of Matches / Practice Sessions (Zero-Config `AUTO` Mode)
 ```bash
 java -jar build/libs/flux-processor.jar <path/to/match-logs> --out ./output
+```
+
+### Custom Robot Profile (`--profile` or `--robot`) for Any FRC Team
+`FluxProcessor` works out of the box with **CTRE Phoenix 6** (`.hoot` / `.wpilog`), **AdvantageKit** (`/Drive/Module0..3/*`, `double[]` `/Drive/DriveCurrentAmps`), **WPILib `DataLogManager` / DogLog / Epilogue**, and **REV URCL** logs.
+- **Zero-Config Auto-Discovery (`--robot AUTO`, default):** Automatically detects Team 10413 `FUEL` / `CORAL` presets or scans the `.wpilog` entry table to discover any other FRC team's swerve modules, mechanisms, battery voltage, and enable signals.
+- **External JSON Profile (`--profile robot-profile.json` or placed in the log folder):** Any team can define custom CAN IDs, gear ratios, or custom topic paths without recompiling Java:
+```json
+{
+  "robotName": "KRAKEN_BOT",
+  "pigeonId": 1,
+  "wheelRadiusMeters": 0.0508,
+  "driveGearRatio": 5.90,
+  "corners": {
+    "FL": { "driveId": 10, "steerId": 11, "cancoderId": 12 },
+    "FR": { "driveId": 20, "steerId": 21, "cancoderId": 22 },
+    "BL": { "driveId": 30, "steerId": 31, "cancoderId": 32 },
+    "BR": { "driveId": 40, "steerId": 41, "cancoderId": 42 }
+  },
+  "mechanisms": [
+    { "name": "Elevator", "motorId": 50, "role": "Position Lift", "currentLimitAmps": 60.0, "isShooter": false },
+    { "name": "Launcher", "motorId": 51, "role": "Flywheel Leader", "currentLimitAmps": 80.0, "isShooter": true },
+    { "name": "Kicker",   "motorId": 52, "role": "Feeder Roller",   "currentLimitAmps": 40.0, "isShooter": false }
+  ]
+}
 ```

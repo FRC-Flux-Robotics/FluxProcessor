@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.stream.Stream;
 
 /**
@@ -20,7 +21,7 @@ import java.util.stream.Stream;
  *
  * <pre>
  * Usage:
- *   java -jar flux-processor.jar &lt;input-dir&gt; [--out &lt;output-dir&gt;] [--robot FUEL|CORAL] [--no-merge]
+ *   java -jar flux-processor.jar &lt;input-dir&gt; [--out &lt;output-dir&gt;] [--robot AUTO|FUEL|CORAL|&lt;NAME&gt;] [--profile &lt;robot-profile.json&gt;] [--no-merge]
  * </pre>
  */
 public final class FluxProcessorMain {
@@ -34,7 +35,7 @@ public final class FluxProcessorMain {
     Path inputDir = Paths.get(args[0]);
     Path outputDir = null;
     Path owletPath = null;
-    RobotProfile profile = RobotProfile.FUEL;
+    RobotProfile profile = RobotProfile.AUTO;
     boolean writeMerged = true;
 
     for (int i = 1; i < args.length; i++) {
@@ -49,10 +50,31 @@ public final class FluxProcessorMain {
             owletPath = Paths.get(args[++i]);
           }
         }
+        case "--profile", "-p" -> {
+          if (i + 1 < args.length) {
+            profile = RobotProfile.fromJson(Paths.get(args[++i]));
+          }
+        }
         case "--robot", "-r" -> {
           if (i + 1 < args.length) {
-            String r = args[++i].toUpperCase(Locale.ROOT);
-            profile = "CORAL".equals(r) ? RobotProfile.CORAL : RobotProfile.FUEL;
+            String raw = args[++i].trim();
+            String upper = raw.toUpperCase(Locale.ROOT);
+            if ("FUEL".equals(upper)) {
+              profile = RobotProfile.FUEL;
+            } else if ("CORAL".equals(upper)) {
+              profile = RobotProfile.CORAL;
+            } else if ("AUTO".equals(upper)) {
+              profile = RobotProfile.AUTO;
+            } else {
+              profile =
+                  new RobotProfile(
+                      raw,
+                      RobotProfile.AUTO.pigeonId(),
+                      RobotProfile.AUTO.wheelRadiusMeters(),
+                      RobotProfile.AUTO.driveGearRatio(),
+                      Map.of(),
+                      List.of());
+            }
           }
         }
         case "--no-merge" -> writeMerged = false;

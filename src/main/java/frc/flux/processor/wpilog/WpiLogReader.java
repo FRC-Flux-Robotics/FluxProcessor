@@ -210,9 +210,9 @@ public final class WpiLogReader {
         }
       } else {
         // Ignore non-monotonic wall-clock epoch timestamps (> 100,000 seconds of robot uptime)
-        boolean isMonotonicTs = timestampUs > 0 && timestampUs < 100_000_000_000L;
+        boolean isMonotonicTs = timestampUs >= 0 && timestampUs < 100_000_000_000L;
         if (isMonotonicTs) {
-          if (timestampUs < minTs) {
+          if (timestampUs > 0 && timestampUs < minTs) {
             minTs = timestampUs;
           }
           if (timestampUs > maxTs) {
@@ -231,9 +231,40 @@ public final class WpiLogReader {
           } else if ("int64".equals(type) && payloadSize == 8) {
             double v = buf.getLong();
             doubleSeries.computeIfAbsent(def.name(), k -> new ArrayList<>()).add(new DoubleSample(timestampUs, v));
+          } else if ("double[]".equals(type) && payloadSize >= 8 && payloadSize % 8 == 0) {
+            int count = payloadSize / 8;
+            for (int idx = 0; idx < count; idx++) {
+              double v = buf.getDouble();
+              doubleSeries
+                  .computeIfAbsent(def.name() + "[" + idx + "]", k -> new ArrayList<>())
+                  .add(new DoubleSample(timestampUs, v));
+            }
+          } else if ("float[]".equals(type) && payloadSize >= 4 && payloadSize % 4 == 0) {
+            int count = payloadSize / 4;
+            for (int idx = 0; idx < count; idx++) {
+              double v = buf.getFloat();
+              doubleSeries
+                  .computeIfAbsent(def.name() + "[" + idx + "]", k -> new ArrayList<>())
+                  .add(new DoubleSample(timestampUs, v));
+            }
+          } else if ("int64[]".equals(type) && payloadSize >= 8 && payloadSize % 8 == 0) {
+            int count = payloadSize / 8;
+            for (int idx = 0; idx < count; idx++) {
+              double v = buf.getLong();
+              doubleSeries
+                  .computeIfAbsent(def.name() + "[" + idx + "]", k -> new ArrayList<>())
+                  .add(new DoubleSample(timestampUs, v));
+            }
           } else if ("boolean".equals(type) && payloadSize == 1) {
             boolean v = buf.get() != 0;
             booleanSeries.computeIfAbsent(def.name(), k -> new ArrayList<>()).add(new BooleanSample(timestampUs, v));
+          } else if ("boolean[]".equals(type) && payloadSize >= 1) {
+            for (int idx = 0; idx < payloadSize; idx++) {
+              boolean v = buf.get() != 0;
+              booleanSeries
+                  .computeIfAbsent(def.name() + "[" + idx + "]", k -> new ArrayList<>())
+                  .add(new BooleanSample(timestampUs, v));
+            }
           } else if (("string".equals(type) || "json".equals(type)) && payloadSize >= 0) {
             byte[] strBytes = new byte[payloadSize];
             buf.get(strBytes);

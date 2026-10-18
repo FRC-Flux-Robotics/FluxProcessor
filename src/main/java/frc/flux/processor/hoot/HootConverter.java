@@ -127,6 +127,11 @@ public final class HootConverter {
         continue;
       }
       if (owlet == null) {
+        System.err.printf(
+            Locale.US,
+            " [WARN] Found unconverted .hoot file (%s) in %s, but 'owlet' CLI was not found in PATH or ~/.flux/owlet (pass --owlet /path/to/owlet).%n",
+            fileName,
+            runDir);
         continue;
       }
 

@@ -77,6 +77,14 @@ public final class WpiLogWriter implements Closeable {
     writeRecord(entryId, timestampUs, buf.array());
   }
 
+  public void appendDoubleArray(int entryId, long timestampUs, double[] values) throws IOException {
+    ByteBuffer buf = ByteBuffer.allocate(values.length * 8).order(ByteOrder.LITTLE_ENDIAN);
+    for (double v : values) {
+      buf.putDouble(v);
+    }
+    writeRecord(entryId, timestampUs, buf.array());
+  }
+
   public void appendBoolean(int entryId, long timestampUs, boolean value) throws IOException {
     writeRecord(entryId, timestampUs, new byte[] {(byte) (value ? 1 : 0)});
   }

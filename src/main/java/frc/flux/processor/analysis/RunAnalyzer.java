@@ -91,35 +91,60 @@ public final class RunAnalyzer {
       throw new IOException("No .wpilog files found in " + runDir);
     }
 
+    List<ParsedLog> allLogs = new ArrayList<>();
+    for (Path p : wpilogs) {
+      allLogs.add(WpiLogReader.read(p));
+    }
+
+    // Resolve AUTO or external robot-profile.json against the actual topics present in allLogs
+    profile = RobotProfile.resolveForLogs(profile, allLogs, runDir);
+
     ParsedLog rioLog = null;
     ParsedLog driveLog = null;
     ParsedLog mechLog = null;
-    List<ParsedLog> allLogs = new ArrayList<>();
 
-    for (Path p : wpilogs) {
-      ParsedLog parsed = WpiLogReader.read(p);
-      allLogs.add(parsed);
-      String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
+    for (ParsedLog parsed : allLogs) {
+      String name = parsed.sourcePath().getFileName().toString().toLowerCase(Locale.ROOT);
       if (name.contains("_drive")
           || name.contains("c44632da")
-          || parsed.entriesByName().containsKey("Phoenix6/Pigeon2-" + profile.pigeonId() + "/Yaw")) {
-        driveLog = parsed;
-      } else if (name.contains("_mech")
+          || (profile.pigeonId() > 0
+              && parsed
+                  .entriesByName()
+                  .containsKey("Phoenix6/Pigeon2-" + profile.pigeonId() + "/Yaw"))
+          || hasAnyCornerTopicInLog(parsed, profile)) {
+        if (driveLog == null || name.contains("_drive") || name.contains("c44632da")) {
+          driveLog = parsed;
+        }
+      }
+      if (name.contains("_mech")
           || name.contains("ea94e177")
-          || parsed.entriesByName().containsKey("Phoenix6/TalonFX-11/Velocity")) {
-        mechLog = parsed;
-      } else if (name.contains("_rio")
+          || hasAnyMechanismTopicInLog(parsed, profile)) {
+        if (mechLog == null || name.contains("_mech") || name.contains("ea94e177")) {
+          mechLog = parsed;
+        }
+      }
+      if (name.contains("_rio")
           || name.startsWith("rio_")
-          || parsed.entriesByName().containsKey("RobotEnable")) {
-        rioLog = parsed;
+          || parsed.entriesByName().containsKey("RobotEnable")
+          || parsed.entriesByName().containsKey("/DriverStation/Enabled")
+          || parsed.entriesByName().containsKey("DS:enabled")) {
+        if (rioLog == null || name.contains("_rio") || name.startsWith("rio_")) {
+          rioLog = parsed;
+        }
       }
     }
 
     if (driveLog == null && !allLogs.isEmpty()) {
       driveLog = allLogs.get(0);
     }
+    if (mechLog == null && allLogs.size() == 1) {
+      mechLog = allLogs.get(0);
+    }
+    if (rioLog == null && !allLogs.isEmpty()) {
+      rioLog = allLogs.get(0);
+    }
 
-    RunMeta meta = loadRunMeta(runDir);
+    RunMeta meta = loadRunMeta(runDir, profile.robotName());
     String runId = runDir.getFileName().toString();
 
     long globalMinUs = Long.MAX_VALUE;
@@ -137,33 +162,59 @@ public final class RunAnalyzer {
       globalMaxUs = 0;
     }
 
-    // Extract Alliance, FMS, Mode, and Enable timeline from rioLog (with fallback to driveLog/mechLog)
+    // Extract Alliance, FMS, Mode, and Enable timeline across Phoenix 6, AdvantageKit, and WPILib
     String alliance = "Unknown";
     boolean isFms =
         runId.toUpperCase(Locale.ROOT).contains("QUAL")
+            || runId.toUpperCase(Locale.ROOT).contains("PLAYOFF")
+            || runId.toUpperCase(Locale.ROOT).contains("ELIM")
             || runId.toUpperCase(Locale.ROOT).contains("NYTR");
     String matchType = isFms ? "FMS Official Match" : "Practice / Pit Session";
 
     List<BooleanSample> enableSeries =
-        rioLog != null ? rioLog.getBooleanSeries("RobotEnable") : Collections.emptyList();
-    if (enableSeries.isEmpty() && driveLog != null) {
-      enableSeries = driveLog.getBooleanSeries("RobotEnable");
+        findBooleanSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "RobotEnable",
+                "/DriverStation/Enabled",
+                "DriverStation/Enabled",
+                "/AdvantageKit/DriverStation/Enabled",
+                "DS:enabled",
+                "/DS:enabled",
+                "FMSInfo/IsEnabled",
+                "/FMSInfo/IsEnabled",
+                "RobotState/Enabled"));
+
+    List<StringSample> alliances =
+        findStringSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "AllianceStation",
+                "/DriverStation/AllianceStation",
+                "DriverStation/AllianceStation",
+                "/AdvantageKit/DriverStation/AllianceStation",
+                "FMSInfo/AllianceStation"));
+    if (!alliances.isEmpty()) {
+      alliance = alliances.get(alliances.size() - 1).value();
     }
-    if (enableSeries.isEmpty() && mechLog != null) {
-      enableSeries = mechLog.getBooleanSeries("RobotEnable");
-    }
-    if (rioLog != null) {
-      List<StringSample> alliances = rioLog.getStringSeries("AllianceStation");
-      if (!alliances.isEmpty()) {
-        alliance = alliances.get(alliances.size() - 1).value();
-      }
-      List<BooleanSample> fmsSamples = rioLog.getBooleanSeries("DS:IsFMSAttached");
-      for (BooleanSample b : fmsSamples) {
-        if (b.value()) {
-          isFms = true;
-          matchType = "FMS Official Match";
-          break;
-        }
+
+    List<BooleanSample> fmsSamples =
+        findBooleanSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "DS:IsFMSAttached",
+                "/DriverStation/FMSAttached",
+                "DriverStation/FMSAttached",
+                "/AdvantageKit/DriverStation/FMSAttached",
+                "FMSInfo/IsFMSAttached"));
+    for (BooleanSample b : fmsSamples) {
+      if (b.value()) {
+        isFms = true;
+        matchType = "FMS Official Match";
+        break;
       }
     }
     if ("Unknown".equals(alliance)) {
@@ -175,6 +226,10 @@ public final class RunAnalyzer {
         alliance = "Blue 3";
       } else if (runId.contains("Red1")) {
         alliance = "Red 1";
+      } else if (runId.contains("Red2")) {
+        alliance = "Red 2";
+      } else if (runId.contains("Red3")) {
+        alliance = "Red 3";
       }
     }
 
@@ -234,7 +289,15 @@ public final class RunAnalyzer {
 
     // Build synchronized timeline across all buses
     List<TimelinePoint> timeline =
-        buildTimeline(t0Us, totalDurationSec, profile, rioLog, driveLog, mechLog, enableSeries);
+        buildTimeline(
+            t0Us,
+            totalDurationSec,
+            profile,
+            allLogs,
+            rioLog,
+            driveLog,
+            mechLog,
+            enableSeries);
 
     // Compute total distance & peak speed
     double totalDistanceM = 0.0;
@@ -257,14 +320,23 @@ public final class RunAnalyzer {
 
     // 2. 4-Corner Swerve Symmetry Audit (scoped to active window [t0Us, windowEndUs])
     List<CornerMetrics> swerveCorners =
-        analyzeSwerveSymmetry(profile, driveLog, t0Us, windowEndUs);
+        analyzeSwerveSymmetry(profile, allLogs, driveLog, t0Us, windowEndUs);
 
     // 3. Mechanism Audit (scoped to active window [t0Us, windowEndUs])
-    List<MechanismMetrics> mechanisms = analyzeMechanisms(profile, mechLog, t0Us, windowEndUs);
+    List<MechanismMetrics> mechanisms =
+        analyzeMechanisms(profile, allLogs, mechLog, t0Us, windowEndUs);
 
-    // 4. Discrete Shot / Feed Event Detection
+    // 4. Discrete Shot / Feed / Cycle Event Detection
     List<ShotEvent> shots =
-        detectShots(timeline, mechLog, t0Us, meta.videoUrl(), meta.videoOffsetSec(), firstEnableUs);
+        detectShots(
+            timeline,
+            profile,
+            allLogs,
+            mechLog,
+            t0Us,
+            meta.videoUrl(),
+            meta.videoOffsetSec(),
+            firstEnableUs);
 
     // 5. Voice-to-Sensor 6-Second Lookback Correlation
     List<VoiceCorrelation> voiceCorrelations =
@@ -391,6 +463,7 @@ public final class RunAnalyzer {
       long t0Us,
       double totalDurationSec,
       RobotProfile profile,
+      List<ParsedLog> allLogs,
       ParsedLog rioLog,
       ParsedLog driveLog,
       ParsedLog mechLog,
@@ -399,55 +472,121 @@ public final class RunAnalyzer {
     double dt = totalDurationSec > 0 ? totalDurationSec / steps : 0.2;
 
     List<StringSample> modeS =
-        rioLog != null ? rioLog.getStringSeries("RobotMode") : Collections.emptyList();
+        findStringSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "RobotMode",
+                "/DriverStation/Mode",
+                "DriverStation/Mode",
+                "/AdvantageKit/DriverStation/Mode",
+                "DS:mode"));
 
-    List<DoubleSample> pigeonVolt =
-        driveLog != null
-            ? driveLog.getDoubleSeries("Phoenix6/Pigeon2-" + profile.pigeonId() + "/SupplyVoltage")
-            : Collections.emptyList();
-    List<DoubleSample> driveMotorVolt =
-        driveLog != null
-            ? driveLog.getDoubleSeries("Phoenix6/TalonFX-2/SupplyVoltage")
-            : Collections.emptyList();
-    List<DoubleSample> shooterVolt =
-        mechLog != null
-            ? mechLog.getDoubleSeries("Phoenix6/TalonFX-11/SupplyVoltage")
-            : Collections.emptyList();
+    // Resolve all available battery/supply voltage series across Phoenix 6, AdvantageKit, WPILib, and URCL
+    List<List<DoubleSample>> voltageSources = new ArrayList<>();
+    addIfNonEmpty(
+        voltageSources,
+        findDoubleSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/SystemStats/BatteryVoltage",
+                "SystemStats/BatteryVoltage",
+                "/AdvantageKit/SystemStats/BatteryVoltage",
+                "RobotController/BatteryVoltage",
+                "/RobotController/BatteryVoltage",
+                "PowerDistribution/Voltage",
+                "/PowerDistribution/Voltage",
+                "PDH/Voltage",
+                "PDP/Voltage",
+                "DS:batteryVoltage")));
+    if (profile.pigeonId() > 0) {
+      addIfNonEmpty(
+          voltageSources,
+          findDoubleSeries(
+              allLogs,
+              driveLog,
+              List.of("Phoenix6/Pigeon2-" + profile.pigeonId() + "/SupplyVoltage")));
+    }
+    for (RobotProfile.CornerConfig c : profile.corners().values()) {
+      if (c.driveMotorId() > 0) {
+        addIfNonEmpty(
+            voltageSources,
+            findDoubleSeries(
+                allLogs,
+                driveLog,
+                List.of("Phoenix6/TalonFX-" + c.driveMotorId() + "/SupplyVoltage")));
+        break;
+      }
+    }
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      if (m.isShooter() && m.motorId() > 0) {
+        addIfNonEmpty(
+            voltageSources,
+            findDoubleSeries(
+                allLogs,
+                mechLog,
+                List.of("Phoenix6/TalonFX-" + m.motorId() + "/SupplyVoltage")));
+        break;
+      }
+    }
+    if (voltageSources.isEmpty()) {
+      // Fallback: scan any topic ending in BatteryVoltage, SupplyVoltage, or BusVoltage
+      for (ParsedLog log : allLogs) {
+        for (Map.Entry<String, List<DoubleSample>> e : log.allDoubleSeries().entrySet()) {
+          String k = e.getKey().toLowerCase(Locale.ROOT);
+          if ((k.endsWith("batteryvoltage") || k.endsWith("supplyvoltage") || k.endsWith("busvoltage"))
+              && !e.getValue().isEmpty()) {
+            voltageSources.add(e.getValue());
+            if (voltageSources.size() >= 3) {
+              break;
+            }
+          }
+        }
+      }
+    }
 
     List<List<DoubleSample>> driveStators = new ArrayList<>();
     List<List<DoubleSample>> driveSupplies = new ArrayList<>();
     List<List<DoubleSample>> driveVelocities = new ArrayList<>();
-    if (driveLog != null) {
-      for (RobotProfile.CornerConfig c : profile.corners().values()) {
-        driveStators.add(
-            driveLog.getDoubleSeries("Phoenix6/TalonFX-" + c.driveMotorId() + "/StatorCurrent"));
-        driveSupplies.add(
-            driveLog.getDoubleSeries("Phoenix6/TalonFX-" + c.driveMotorId() + "/SupplyCurrent"));
-        driveVelocities.add(
-            driveLog.getDoubleSeries("Phoenix6/TalonFX-" + c.driveMotorId() + "/Velocity"));
+    List<Double> velConversionFactors = new ArrayList<>();
+    double rotToMeters =
+        (1.0 / profile.driveGearRatio()) * (2.0 * Math.PI * profile.wheelRadiusMeters());
+
+    for (RobotProfile.CornerConfig c : profile.corners().values()) {
+      driveStators.add(findDoubleSeriesByTopic(allLogs, driveLog, c.driveStatorTopic()));
+      driveSupplies.add(findDoubleSeriesByTopic(allLogs, driveLog, c.driveSupplyTopic()));
+      List<DoubleSample> vSeries = findDoubleSeriesByTopic(allLogs, driveLog, c.driveVelocityTopic());
+      driveVelocities.add(vSeries);
+      String vTopicLower = c.driveVelocityTopic().toLowerCase(Locale.ROOT);
+      if (vTopicLower.contains("meterspersec") || vTopicLower.contains("mps")) {
+        velConversionFactors.add(1.0);
+      } else if (vTopicLower.contains("radpersec")) {
+        velConversionFactors.add(profile.wheelRadiusMeters());
+      } else {
+        velConversionFactors.add(rotToMeters);
       }
     }
 
+    // Resolve primary shooter/launcher velocity and feeder/indexer stator current from profile.mechanisms()
+    RobotProfile.MechMotorSpec shooterLeader = findShooterLeader(profile);
+    RobotProfile.MechMotorSpec feederSpec = findFeederMechanism(profile, shooterLeader);
+
     List<DoubleSample> shooterLeftVel =
-        mechLog != null
-            ? mechLog.getDoubleSeries("Phoenix6/TalonFX-11/Velocity")
+        shooterLeader != null
+            ? findDoubleSeriesByTopic(allLogs, mechLog, shooterLeader.velocityTopic())
             : Collections.emptyList();
     List<DoubleSample> feederStator =
-        mechLog != null
-            ? mechLog.getDoubleSeries("Phoenix6/TalonFX-3/StatorCurrent")
+        feederSpec != null
+            ? findDoubleSeriesByTopic(allLogs, mechLog, feederSpec.statorTopic())
             : Collections.emptyList();
 
     List<List<DoubleSample>> mechSupplies = new ArrayList<>();
-    if (mechLog != null) {
-      for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
-        mechSupplies.add(
-            mechLog.getDoubleSeries("Phoenix6/TalonFX-" + m.motorId() + "/SupplyCurrent"));
-      }
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      mechSupplies.add(findDoubleSeriesByTopic(allLogs, mechLog, m.supplyTopic()));
     }
 
     List<TimelinePoint> points = new ArrayList<>(steps + 1);
-    double rotToMeters =
-        (1.0 / profile.driveGearRatio()) * (2.0 * Math.PI * profile.wheelRadiusMeters());
     long halfWindowUs = Math.max(20_000L, Math.round(dt * 500_000.0));
 
     for (int i = 0; i <= steps; i++) {
@@ -459,18 +598,12 @@ public final class RunAnalyzer {
       boolean enabled = sampleBooleanAt(enableS, tsUs, false);
       String mode = sampleStringAt(modeS, tsUs, enabled ? "Teleop" : "Disabled");
 
-      double vPigeon = minInWindowOrSample(pigeonVolt, wMinUs, wMaxUs, tsUs, Double.NaN);
-      double vDrive = minInWindowOrSample(driveMotorVolt, wMinUs, wMaxUs, tsUs, Double.NaN);
-      double vShoot = minInWindowOrSample(shooterVolt, wMinUs, wMaxUs, tsUs, Double.NaN);
       double vBatt = 14.0;
-      if (!Double.isNaN(vPigeon) && vPigeon > 3.0) {
-        vBatt = Math.min(vBatt, vPigeon);
-      }
-      if (!Double.isNaN(vDrive) && vDrive > 3.0) {
-        vBatt = Math.min(vBatt, vDrive);
-      }
-      if (!Double.isNaN(vShoot) && vShoot > 3.0) {
-        vBatt = Math.min(vBatt, vShoot);
+      for (List<DoubleSample> vSrc : voltageSources) {
+        double vSample = minInWindowOrSample(vSrc, wMinUs, wMaxUs, tsUs, Double.NaN);
+        if (!Double.isNaN(vSample) && vSample > 3.0) {
+          vBatt = Math.min(vBatt, vSample);
+        }
       }
       if (vBatt == 14.0) {
         vBatt = 12.4;
@@ -501,9 +634,11 @@ public final class RunAnalyzer {
 
       double sumWheelSpeedMps = 0.0;
       int velCount = 0;
-      for (List<DoubleSample> s : driveVelocities) {
+      for (int cIdx = 0; cIdx < driveVelocities.size(); cIdx++) {
+        List<DoubleSample> s = driveVelocities.get(cIdx);
         if (!s.isEmpty()) {
-          sumWheelSpeedMps += Math.abs(sampleDoubleAt(s, tsUs, 0.0)) * rotToMeters;
+          sumWheelSpeedMps +=
+              Math.abs(sampleDoubleAt(s, tsUs, 0.0)) * velConversionFactors.get(cIdx);
           velCount++;
         }
       }
@@ -633,7 +768,11 @@ public final class RunAnalyzer {
   }
 
   private static List<CornerMetrics> analyzeSwerveSymmetry(
-      RobotProfile profile, ParsedLog driveLog, long minTsUs, long maxTsUs) {
+      RobotProfile profile,
+      List<ParsedLog> allLogs,
+      ParsedLog driveLog,
+      long minTsUs,
+      long maxTsUs) {
     List<CornerMetrics> rawCorners = new ArrayList<>();
     String[] order = {"FL", "FR", "BL", "BR"};
 
@@ -642,22 +781,10 @@ public final class RunAnalyzer {
       if (cfg == null) {
         continue;
       }
-      List<DoubleSample> dStator =
-          driveLog != null
-              ? driveLog.getDoubleSeries("Phoenix6/TalonFX-" + cfg.driveMotorId() + "/StatorCurrent")
-              : Collections.emptyList();
-      List<DoubleSample> dSupply =
-          driveLog != null
-              ? driveLog.getDoubleSeries("Phoenix6/TalonFX-" + cfg.driveMotorId() + "/SupplyCurrent")
-              : Collections.emptyList();
-      List<DoubleSample> dVel =
-          driveLog != null
-              ? driveLog.getDoubleSeries("Phoenix6/TalonFX-" + cfg.driveMotorId() + "/Velocity")
-              : Collections.emptyList();
-      List<DoubleSample> sStator =
-          driveLog != null
-              ? driveLog.getDoubleSeries("Phoenix6/TalonFX-" + cfg.steerMotorId() + "/StatorCurrent")
-              : Collections.emptyList();
+      List<DoubleSample> dStator = findDoubleSeriesByTopic(allLogs, driveLog, cfg.driveStatorTopic());
+      List<DoubleSample> dSupply = findDoubleSeriesByTopic(allLogs, driveLog, cfg.driveSupplyTopic());
+      List<DoubleSample> dVel = findDoubleSeriesByTopic(allLogs, driveLog, cfg.driveVelocityTopic());
+      List<DoubleSample> sStator = findDoubleSeriesByTopic(allLogs, driveLog, cfg.steerStatorTopic());
 
       double meanDStator = meanAbsActive(dStator, 2.0, minTsUs, maxTsUs);
       double peakDStator = maxAbs(dStator, minTsUs, maxTsUs);
@@ -719,20 +846,18 @@ public final class RunAnalyzer {
   }
 
   private static List<MechanismMetrics> analyzeMechanisms(
-      RobotProfile profile, ParsedLog mechLog, long minTsUs, long maxTsUs) {
+      RobotProfile profile,
+      List<ParsedLog> allLogs,
+      ParsedLog mechLog,
+      long minTsUs,
+      long maxTsUs) {
     List<MechanismMetrics> list = new ArrayList<>();
     for (RobotProfile.MechMotorSpec spec : profile.mechanisms()) {
-      String prefix = "Phoenix6/TalonFX-" + spec.motorId() + "/";
-      List<DoubleSample> stator =
-          mechLog != null ? mechLog.getDoubleSeries(prefix + "StatorCurrent") : Collections.emptyList();
-      List<DoubleSample> supply =
-          mechLog != null ? mechLog.getDoubleSeries(prefix + "SupplyCurrent") : Collections.emptyList();
-      List<DoubleSample> vel =
-          mechLog != null ? mechLog.getDoubleSeries(prefix + "Velocity") : Collections.emptyList();
-      List<DoubleSample> pos =
-          mechLog != null ? mechLog.getDoubleSeries(prefix + "Position") : Collections.emptyList();
-      List<DoubleSample> resets =
-          mechLog != null ? mechLog.getDoubleSeries(prefix + "ResetCount") : Collections.emptyList();
+      List<DoubleSample> stator = findDoubleSeriesByTopic(allLogs, mechLog, spec.statorTopic());
+      List<DoubleSample> supply = findDoubleSeriesByTopic(allLogs, mechLog, spec.supplyTopic());
+      List<DoubleSample> vel = findDoubleSeriesByTopic(allLogs, mechLog, spec.velocityTopic());
+      List<DoubleSample> pos = findDoubleSeriesByTopic(allLogs, mechLog, spec.positionTopic());
+      List<DoubleSample> resets = findDoubleSeriesByTopic(allLogs, mechLog, spec.resetTopic());
 
       double meanStator = meanAbsActive(stator, 1.5, minTsUs, maxTsUs);
       double peakStator = maxAbs(stator, minTsUs, maxTsUs);
@@ -771,19 +896,25 @@ public final class RunAnalyzer {
 
   private static List<ShotEvent> detectShots(
       List<TimelinePoint> timeline,
+      RobotProfile profile,
+      List<ParsedLog> allLogs,
       ParsedLog mechLog,
       long t0Us,
       String videoUrl,
       double videoOffsetSec,
       long firstEnableUs) {
     List<ShotEvent> shots = new ArrayList<>();
+    RobotProfile.MechMotorSpec shooterLeader = findShooterLeader(profile);
+    RobotProfile.MechMotorSpec shooterFollower = findShooterFollower(profile, shooterLeader);
+    RobotProfile.MechMotorSpec hoodOrPosSpec = findHoodOrPositionMechanism(profile);
+
     List<DoubleSample> shooterRightVel =
-        mechLog != null
-            ? mechLog.getDoubleSeries("Phoenix6/TalonFX-10/Velocity")
+        shooterFollower != null
+            ? findDoubleSeriesByTopic(allLogs, mechLog, shooterFollower.velocityTopic())
             : Collections.emptyList();
     List<DoubleSample> hoodPos =
-        mechLog != null
-            ? mechLog.getDoubleSeries("Phoenix6/TalonFX-12/Position")
+        hoodOrPosSpec != null
+            ? findDoubleSeriesByTopic(allLogs, mechLog, hoodOrPosSpec.positionTopic())
             : Collections.emptyList();
 
     boolean inShot = false;
@@ -802,7 +933,10 @@ public final class RunAnalyzer {
           pt.enabled() && pt.shooterLeftRps() > 15.0 && pt.feederStatorAmps() > 6.5;
       if (activeFeed) {
         long tsUs = t0Us + Math.round(pt.timeSec() * 1_000_000.0);
-        double sRight = Math.abs(sampleDoubleAt(shooterRightVel, tsUs, pt.shooterLeftRps()));
+        double sRight =
+            !shooterRightVel.isEmpty()
+                ? Math.abs(sampleDoubleAt(shooterRightVel, tsUs, pt.shooterLeftRps()))
+                : pt.shooterLeftRps();
         double hPos = sampleDoubleAt(hoodPos, tsUs, 0.0);
         if (!inShot) {
           inShot = true;
@@ -1000,8 +1134,11 @@ public final class RunAnalyzer {
     return videoUrl + "#t=" + jumpSec;
   }
 
-  private static RunMeta loadRunMeta(Path runDir) throws IOException {
-    String battery = "FUEL-Comp-Battery";
+  private static RunMeta loadRunMeta(Path runDir, String robotName) throws IOException {
+    String battery =
+        "FUEL".equalsIgnoreCase(robotName)
+            ? "FUEL-Comp-Battery"
+            : (robotName != null && !robotName.isBlank() ? robotName + "-Battery" : "Main-Battery");
     String gitSha = "2026-NYTR";
     String configSha = "default";
     String videoUrl = "";
@@ -1125,9 +1262,197 @@ public final class RunAnalyzer {
       }
 
       copyLogSeries(writer, "/Rio/", rioLog);
-      copyLogSeries(writer, "/DriveBus/", driveLog);
-      copyLogSeries(writer, "/MechBus/", mechLog);
+      if (driveLog != rioLog) {
+        copyLogSeries(writer, "/DriveBus/", driveLog);
+      }
+      if (mechLog != rioLog && mechLog != driveLog) {
+        copyLogSeries(writer, "/MechBus/", mechLog);
+      }
     }
+  }
+
+  private static boolean hasAnyCornerTopicInLog(ParsedLog log, RobotProfile profile) {
+    for (RobotProfile.CornerConfig c : profile.corners().values()) {
+      if (!findDoubleSeriesByTopic(List.of(log), log, c.driveStatorTopic()).isEmpty()
+          || !findDoubleSeriesByTopic(List.of(log), log, c.driveVelocityTopic()).isEmpty()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean hasAnyMechanismTopicInLog(ParsedLog log, RobotProfile profile) {
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      if (!findDoubleSeriesByTopic(List.of(log), log, m.statorTopic()).isEmpty()
+          || !findDoubleSeriesByTopic(List.of(log), log, m.velocityTopic()).isEmpty()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static RobotProfile.MechMotorSpec findShooterLeader(RobotProfile profile) {
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      if (m.isShooter()
+          && (m.role().toLowerCase(Locale.ROOT).contains("leader")
+              || m.name().toLowerCase(Locale.ROOT).contains("left"))) {
+        return m;
+      }
+    }
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      if (m.isShooter()) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  private static RobotProfile.MechMotorSpec findShooterFollower(
+      RobotProfile profile, RobotProfile.MechMotorSpec leader) {
+    if (leader == null) {
+      return null;
+    }
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      if (m.isShooter() && m != leader) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  private static RobotProfile.MechMotorSpec findFeederMechanism(
+      RobotProfile profile, RobotProfile.MechMotorSpec shooterLeader) {
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      String r = (m.name() + " " + m.role()).toLowerCase(Locale.ROOT);
+      if (r.contains("feed") || r.contains("kicker") || r.contains("transfer")) {
+        return m;
+      }
+    }
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      String r = (m.name() + " " + m.role()).toLowerCase(Locale.ROOT);
+      if (r.contains("index") || r.contains("intake") || r.contains("roller")) {
+        return m;
+      }
+    }
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      if (!m.isShooter() && m != shooterLeader) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  private static RobotProfile.MechMotorSpec findHoodOrPositionMechanism(RobotProfile profile) {
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      String r = (m.name() + " " + m.role()).toLowerCase(Locale.ROOT);
+      if (r.contains("hood")
+          || r.contains("tilt")
+          || r.contains("wrist")
+          || r.contains("pivot")
+          || r.contains("arm")
+          || r.contains("elevator")
+          || r.contains("position")) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  private static void addIfNonEmpty(
+      List<List<DoubleSample>> target, List<DoubleSample> candidate) {
+    if (candidate != null && !candidate.isEmpty()) {
+      target.add(candidate);
+    }
+  }
+
+  private static List<DoubleSample> findDoubleSeriesByTopic(
+      List<ParsedLog> allLogs, ParsedLog preferred, String rawTopic) {
+    if (rawTopic == null || rawTopic.isBlank()) {
+      return Collections.emptyList();
+    }
+    String clean = rawTopic.startsWith("/") ? rawTopic.substring(1) : rawTopic;
+    return findDoubleSeries(
+        allLogs,
+        preferred,
+        List.of(
+            rawTopic,
+            clean,
+            "/" + clean,
+            "/AdvantageKit/" + clean,
+            "/AdvantageKit/RealOutputs/" + clean,
+            "/RealOutputs/" + clean));
+  }
+
+  private static List<DoubleSample> findDoubleSeries(
+      List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
+    if (preferred != null) {
+      for (String c : candidates) {
+        List<DoubleSample> s = preferred.getDoubleSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    for (ParsedLog log : allLogs) {
+      if (log == preferred) {
+        continue;
+      }
+      for (String c : candidates) {
+        List<DoubleSample> s = log.getDoubleSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    return Collections.emptyList();
+  }
+
+  private static List<BooleanSample> findBooleanSeries(
+      List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
+    if (preferred != null) {
+      for (String c : candidates) {
+        List<BooleanSample> s = preferred.getBooleanSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    for (ParsedLog log : allLogs) {
+      if (log == preferred) {
+        continue;
+      }
+      for (String c : candidates) {
+        List<BooleanSample> s = log.getBooleanSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    return Collections.emptyList();
+  }
+
+  private static List<StringSample> findStringSeries(
+      List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
+    if (preferred != null) {
+      for (String c : candidates) {
+        List<StringSample> s = preferred.getStringSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    for (ParsedLog log : allLogs) {
+      if (log == preferred) {
+        continue;
+      }
+      for (String c : candidates) {
+        List<StringSample> s = log.getStringSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    return Collections.emptyList();
   }
 
   private static void copyLogSeries(WpiLogWriter writer, String prefix, ParsedLog log)
