@@ -29,14 +29,20 @@ Works **out of the box with zero modifications to existing robot code** (`New_Ro
 
 ## Quick Start
 
-### Build & Run Unit Tests (Offline-Ready, Zero External Dependencies)
+### Windows (Double-Click, Drag-and-Drop, or PowerShell)
+No external install is needed if **WPILib** (`C:\Users\Public\wpilib\2026\jdk` or `2027\jdk`) or **Java 17+** is on the laptop, and a ready-to-run [`dist/flux-processor.jar`](dist/flux-processor.jar) is included in the repository:
+1. **Double-Click [`run.bat`](run.bat):** Opens a native Windows folder-picker dialog, analyzes the selected match-logs folder, and automatically opens `runs-index.html` in your browser.
+2. **Drag-and-Drop onto [`run.bat`](run.bat):** Drag any match-logs folder **or** any `match-logs_*.zip` file produced by `pull-logs.bat` directly onto `run.bat` in Windows Explorer.
+3. **PowerShell / Command Prompt:**
+   ```bat
+   run.bat C:\Users\Public\Desktop\match-logs --out .\output
+   ```
+   *(Or to recompile and run all unit tests on Windows: `scripts\build.bat`)*
+
+### Linux / macOS
 ```bash
 ./scripts/build.sh
-```
-
-### Analyze a Folder of Matches / Practice Sessions (Zero-Config `AUTO` Mode)
-```bash
-java -jar build/libs/flux-processor.jar <path/to/match-logs> --out ./output
+java -jar dist/flux-processor.jar <path/to/match-logs> --out ./output
 ```
 
 ### Custom Robot Profile (`--profile` or `--robot`) for Any FRC Team
