@@ -68,3 +68,27 @@ java -jar dist/flux-processor.jar <path/to/match-logs> --out ./output
   ]
 }
 ```
+
+---
+
+## Optional Run Metadata (`run.meta.json`) — Voice Notes, Video Sync & Named Battery
+
+Drop a `run.meta.json` (or `*.meta.json`) into any run folder (written automatically by `FluxTray.jar` during practice or competition) to correlate multi-headset voice notes (`Driver`, `Operator`, `Coach`), YouTube/stand video jump links (`[▶ Watch @ m:ss]`), and named battery health (`batteries-health.csv`):
+
+```json
+{
+  "namedBattery": "BAT-03-COMP",
+  "gitSha": "251dc78",
+  "configSha": "a84f92c1",
+  "videoUrl": "https://www.youtube.com/watch?v=...",
+  "videoOffsetSec": 14.0,
+  "voiceNotes": [
+    { "role": "Driver",   "timeSec": 26.5,  "text": "Hard acceleration out of source, felt a brief stutter" },
+    { "role": "Operator", "timeSec": 82.0,  "text": "Shot felt slightly short from mid-wing" },
+    { "role": "Driver",   "timeSec": 145.0, "text": "Robot keeps browning out and stuttering in endgame!" }
+  ]
+}
+```
+
+- **Competition "Capture on Field, Sync in Pit" Mode:** Because FMS blocks SFTP (Port 22) on the field and requires unplugging immediately on the green light, `FluxTray.jar` records `driver-audio.ogg` + `.dslog` + `run.meta.json` locally on the Driver Station laptop at the field and joins the robot's `.wpilog`/`.hoot` files later in the pit.
+- **CTRE `.hoot` Conversion Resilience (`HootConverter`):** Uses `owlet <hoot> -S -F` (full-file signal scan) with essential signal filtering (`-s`) and omits `-e` (`--enable-only`) so pre-match pit/queue enables never truncate the actual competition match at the end of the `.hoot` file; also accepts `owlet` output at 100% completion even when `owlet` exits with code `1` due to power-off truncation of the final CAN frame.
