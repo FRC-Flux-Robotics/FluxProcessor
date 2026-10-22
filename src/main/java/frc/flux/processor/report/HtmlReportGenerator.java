@@ -5,6 +5,8 @@ import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
 import frc.flux.processor.model.RunAnalysisReport.MechanismMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ShotEvent;
+import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
+import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
 import frc.flux.processor.model.RunAnalysisReport.TimelinePoint;
 import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
 import java.io.IOException;
@@ -278,6 +280,64 @@ public final class HtmlReportGenerator {
           .append("        </tr>\n");
     }
     sb.append("      </tbody>\n    </table>\n  </div>\n");
+
+    // Offline SystemCore / Controller Watch Metrics & Actionable Decisions Card
+    if (r.systemHealth() != null) {
+      SystemHealthMetrics sh = r.systemHealth();
+      sb.append("  <div class=\"card\">\n")
+          .append("    <h2><span>SystemCore &amp; Controller Offline Watch Audit (")
+          .append(esc(sh.controllerType()))
+          .append(")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">")
+          .append(
+              String.format(
+                  Locale.US,
+                  "Loop p50=%.2fms / p99=%.2fms • CPU=%.1f%% (Java %.1f%% / Vision %.1f%%) • Temp=%.1f°C • CAN Drops=%d • Free=%.0fMB",
+                  sh.loopMedianMs(),
+                  sh.loopP99Ms(),
+                  sh.totalCpuPct(),
+                  sh.javaProcessCpuPct(),
+                  sh.visionDaemonCpuPct(),
+                  sh.cpuTempC(),
+                  sh.socketCanDropsAndOverruns(),
+                  sh.freeStorageMb()))
+          .append("</span></h2>\n");
+      if (sh.watchDecisions().isEmpty()) {
+        sb.append(
+            "    <div style=\"font-size:13px;color:#166534;font-weight:600;\">All 14 offline SystemCore / Controller watch metrics are within nominal thresholds (0 warnings).</div>\n");
+      } else {
+        sb.append("    <table>\n")
+            .append(
+                "      <thead><tr><th>Severity</th><th>Category</th><th>Watch Metric</th><th>Measured Value</th><th>Threshold</th><th>Actionable Engineering / Pit Decision</th></tr></thead>\n")
+            .append("      <tbody>\n");
+        for (SystemWatchDecision wd : sh.watchDecisions()) {
+          String pill = "CRITICAL".equals(wd.severity()) ? "pill-fail" : "pill-warn";
+          sb.append("        <tr>\n")
+              .append("          <td><span class=\"pill ")
+              .append(pill)
+              .append("\">")
+              .append(esc(wd.severity()))
+              .append("</span></td>\n")
+              .append("          <td>")
+              .append(esc(wd.category()))
+              .append("</td>\n")
+              .append("          <td><strong>")
+              .append(esc(wd.metricName()))
+              .append("</strong></td>\n")
+              .append("          <td><code>")
+              .append(esc(wd.measuredValue()))
+              .append("</code></td>\n")
+              .append("          <td>")
+              .append(esc(wd.threshold()))
+              .append("</td>\n")
+              .append("          <td>")
+              .append(esc(wd.actionableDecision()))
+              .append("</td>\n")
+              .append("        </tr>\n");
+        }
+        sb.append("      </tbody>\n    </table>\n");
+      }
+      sb.append("  </div>\n");
+    }
 
     // Inline JS to draw timeline canvas
     sb.append("</div>\n<script>\nconst timeline = [\n");

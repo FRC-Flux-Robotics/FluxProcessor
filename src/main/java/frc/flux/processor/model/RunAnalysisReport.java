@@ -25,7 +25,57 @@ public record RunAnalysisReport(
     List<MechanismMetrics> mechanisms,
     List<ShotEvent> shots,
     List<VoiceCorrelation> voiceCorrelations,
-    List<TimelinePoint> timeline) {
+    List<TimelinePoint> timeline,
+    SystemHealthMetrics systemHealth) {
+
+  public RunAnalysisReport(
+      String runId,
+      String robotName,
+      String matchType,
+      String allianceStation,
+      boolean isFmsMatch,
+      String namedBattery,
+      String gitSha,
+      String configSha,
+      String videoUrl,
+      double videoOffsetSeconds,
+      double totalDurationSec,
+      double enabledDurationSec,
+      double totalDistanceMeters,
+      double peakSpeedMps,
+      String overallVerdict,
+      List<String> keyAlerts,
+      BatteryMetrics battery,
+      List<CornerMetrics> swerveCorners,
+      List<MechanismMetrics> mechanisms,
+      List<ShotEvent> shots,
+      List<VoiceCorrelation> voiceCorrelations,
+      List<TimelinePoint> timeline) {
+    this(
+        runId,
+        robotName,
+        matchType,
+        allianceStation,
+        isFmsMatch,
+        namedBattery,
+        gitSha,
+        configSha,
+        videoUrl,
+        videoOffsetSeconds,
+        totalDurationSec,
+        enabledDurationSec,
+        totalDistanceMeters,
+        peakSpeedMps,
+        overallVerdict,
+        keyAlerts,
+        battery,
+        swerveCorners,
+        mechanisms,
+        shots,
+        voiceCorrelations,
+        timeline,
+        null);
+  }
 
   public record BatteryMetrics(
       String batteryName,
@@ -100,4 +150,37 @@ public record RunAnalysisReport(
       double chassisSpeedMps,
       double shooterLeftRps,
       double feederStatorAmps) {}
+
+  /** Offline SystemCore / roboRIO watch metrics and triggered engineering/pit decisions. */
+  public record SystemHealthMetrics(
+      String controllerType,
+      double loopPeriodMs,
+      double loopMedianMs,
+      double loopP99Ms,
+      double loopMaxMs,
+      double firstEnablePeakMs,
+      double totalCpuPct,
+      double javaProcessCpuPct,
+      double visionDaemonCpuPct,
+      double softIrqPct,
+      double cpuTempC,
+      double cpuFreqMHz,
+      int throttledFlags,
+      long socketCanDropsAndOverruns,
+      int socketCanBusErrors,
+      double heapAllocRateMbPerSec,
+      int gcCorrelatedLoopSpikes,
+      double freeStorageMb,
+      double ipc,
+      double llcMissPct,
+      List<SystemWatchDecision> watchDecisions) {}
+
+  public record SystemWatchDecision(
+      String category,
+      String metricName,
+      String measuredValue,
+      String threshold,
+      String severity,
+      String anomalySummary,
+      String actionableDecision) {}
 }

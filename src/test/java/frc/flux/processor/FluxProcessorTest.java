@@ -23,7 +23,8 @@ public final class FluxProcessorTest {
     testEndToEndSyntheticRunWithVoiceAndVideo();
     testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery();
     testOtherTeamCustomJsonProfileAndCustomPhoenix6Ids();
-    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (4/4)");
+    testOfflineSystemCoreWatchMetricsAndReportCard();
+    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (5/5)");
   }
 
   public static void testWpiLogReadWriteRoundTrip() throws Exception {
@@ -270,6 +271,75 @@ public final class FluxProcessorTest {
     assertTrue(
         Math.abs(report.shots().get(0).hoodPositionRot() - 14.5) < 1e-6,
         "Expected Elevator position 14.5 captured during shot");
+  }
+
+  public static void testOfflineSystemCoreWatchMetricsAndReportCard() throws Exception {
+    Path runDir = Files.createTempDirectory("systemcore-watch-test");
+    Files.writeString(
+        runDir.resolve("system-snapshot.txt"),
+        """
+        [PLATFORM]
+        controllerType=SYSTEMCORE
+        hostname=SystemCore-10413
+        [LOOP_AND_TIMING]
+        loopPeriodMs=5.0
+        loopMedianMs=1.6
+        loopP99Ms=7.9
+        loopMaxMs=15.2
+        firstEnablePeakMs=16.8
+        odometryJitterMaxMs=2.1
+        driveTraceMaxMs=0.8
+        visionTraceMaxMs=3.2
+        [CPU_AND_IRQ]
+        totalCpuPct=86.0
+        javaProcessCpuPct=14.0
+        visionDaemonCpuPct=66.0
+        softIrqPct=29.0
+        ioWaitPct=6.5
+        [THERMAL_AND_POWER]
+        cpuTempC=83.0
+        cpuFreqMHz=1800
+        throttledHex=0x50005
+        [SOCKETCAN]
+        can.can_s0=350000,90000,12,0,4,0,0,ERROR-ACTIVE
+        can.can_s1=500,100,0,0,0,0,0,ERROR-ACTIVE
+        can.can_s2=140000,40000,0,0,0,8,1,ERROR-PASSIVE
+        [JVM_AND_STORAGE]
+        heapAllocRateMbPerSec=3.6
+        gcCorrelatedLoopSpikes=2
+        freeStorageMb=250.0
+        [HARDWARE_PMU]
+        ipc=0.72
+        llcMissPct=18.5
+        involuntaryContextSwitches=620
+        """,
+        StandardCharsets.UTF_8);
+
+    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("akit_sc.wpilog"), "AdvantageKit")) {
+      int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+      for (int step = 1; step <= 20; step++) {
+        long tsUs = step * 200_000L;
+        log.appendBoolean(eEnable, tsUs, true);
+        log.appendDouble(eVolt, tsUs, 12.2);
+      }
+    }
+
+    RunAnalysisReport report =
+        RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+    assertTrue(report.systemHealth() != null, "Expected systemHealth to be populated from system-snapshot.txt");
+    assertTrue(
+        report.systemHealth().watchDecisions().size() >= 14,
+        "Expected all 14 offline SystemCore watch decisions to trigger, got "
+            + report.systemHealth().watchDecisions().size());
+    assertTrue("CRITICAL".equals(report.overallVerdict()), "Expected CRITICAL verdict from odd CAN port / thermal");
+
+    Path htmlPath = runDir.resolve("report.html");
+    HtmlReportGenerator.writeRunReport(report, htmlPath);
+    String html = Files.readString(htmlPath, StandardCharsets.UTF_8);
+    assertTrue(
+        html.contains("SystemCore &amp; Controller Offline Watch Audit"),
+        "Expected SystemCore watch audit card in report.html");
   }
 
   private static void assertTrue(boolean cond, String msg) {

@@ -6,6 +6,8 @@ import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
 import frc.flux.processor.model.RunAnalysisReport.MechanismMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ShotEvent;
+import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
+import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
 import frc.flux.processor.model.RunAnalysisReport.TimelinePoint;
 import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
 import frc.flux.processor.wpilog.WpiLogReader;
@@ -409,6 +411,28 @@ public final class RunAnalyzer {
       }
     }
 
+    // 6. Offline SystemCore / Controller Watch Metrics (system-snapshot.txt + .wpilog Performance)
+    SystemHealthMetrics systemHealth =
+        SystemHealthWatchAnalyzer.analyze(runDir, allLogs, t0Us, windowEndUs, firstEnableUs);
+    if (systemHealth != null) {
+      for (SystemWatchDecision wd : systemHealth.watchDecisions()) {
+        if ("CRITICAL".equals(wd.severity())) {
+          overallVerdict = "CRITICAL";
+        } else if ("PASS".equals(overallVerdict)) {
+          overallVerdict = "WARN";
+        }
+        alerts.add(
+            String.format(
+                Locale.US,
+                "[%s] %s (%s): %s -> %s",
+                wd.category(),
+                wd.metricName(),
+                wd.measuredValue(),
+                wd.anomalySummary(),
+                wd.actionableDecision()));
+      }
+    }
+
     if (alerts.isEmpty()) {
       alerts.add(
           String.format(
@@ -456,7 +480,8 @@ public final class RunAnalyzer {
         mechanisms,
         shots,
         voiceCorrelations,
-        timeline);
+        timeline,
+        systemHealth);
   }
 
   private static List<TimelinePoint> buildTimeline(
