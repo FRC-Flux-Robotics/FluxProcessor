@@ -1,6 +1,8 @@
 package frc.flux.processor.model;
 
 import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
+import frc.flux.processor.wpilog.WpiLogReader.StringSample;
+import frc.lib.fluxfig.FluxFig;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,11 +22,19 @@ import java.util.regex.Pattern;
 /**
  * Hardware CAN ID and telemetry topic mapping for FRC robots.
  *
- * <p>Supports built-in Team 10413 presets ({@link #FUEL}, {@link #CORAL}), external JSON profiles
- * ({@code --profile robot-profile.json} or {@code robot-profile.json} in the log folder), and
- * zero-config {@link #AUTO} discovery across CTRE Phoenix 6 ({@code .hoot}/{@code .wpilog}),
- * AdvantageKit ({@code /Drive/Module0..3/*}), WPILib {@code DataLogManager}/DogLog/Epilogue, and
- * REV URCL logs.
+ * <p>Supports:
+ *
+ * <ul>
+ *   <li>Direct {@link FluxFig} hydration from {@code /FluxFig/EffectiveSnapshot} inside {@code
+ *       .wpilog} files or from a {@code FluxFig} CSV directory ({@code parameters.csv} + {@code
+ *       mechanisms.csv}).
+ *   <li>Built-in Team 10413 presets ({@link #FUEL}, {@link #CORAL}).
+ *   <li>External JSON profiles ({@code --profile robot-profile.json} or {@code robot-profile.json}
+ *       in the log folder).
+ *   <li>Zero-config {@link #AUTO} discovery across CTRE Phoenix 6 ({@code .hoot}/{@code .wpilog}),
+ *       AdvantageKit ({@code /Drive/Module0..3/*}), WPILib {@code DataLogManager}/DogLog/Epilogue,
+ *       and REV URCL logs.
+ * </ul>
  */
 public record RobotProfile(
     String robotName,
@@ -121,9 +131,10 @@ public record RobotProfile(
           List.of());
 
   /**
-   * Sentinel profile that inspects each run's {@code .wpilog} entry table (or {@code
-   * robot-profile.json}) to automatically detect {@code FUEL}, {@code CORAL}, or any other FRC
-   * team's robot topology.
+   * Sentinel profile that inspects each run's {@code .wpilog} entry table (including {@code
+   * /FluxFig/EffectiveSnapshot}, {@code robot-profile.json}, or AdvantageKit/CTRE/REV topics) to
+   * automatically detect {@code COMP_2027}, {@code FUEL}, {@code CORAL}, or any other FRC team's
+   * robot topology.
    */
   public static final RobotProfile AUTO =
       new RobotProfile("AUTO", -1, 0.0508, 6.394736842105262, Map.of(), List.of());
@@ -132,37 +143,269 @@ public record RobotProfile(
       Pattern.compile("(?:^|/)Phoenix6/TalonFX-(\\d+)/([A-Za-z0-9_]+)$");
   private static final Pattern PIGEON_PATTERN =
       Pattern.compile("(?:^|/)Phoenix6/Pigeon2-(\\d+)/SupplyVoltage$");
-  private static final Pattern AKIT_MOD_PATTERN =
-      Pattern.compile(
-          "(?i)^/?(?:AdvantageKit/RealOutputs/|RealOutputs/)?(?:Drive|Swerve)/Module\\s*([0-3]|FL|FR|BL|BR)/([A-Za-z0-9_]+)$");
-  private static final Pattern URCL_MOTOR_PATTERN =
-      Pattern.compile(
-          "(?i)^/?(?:URCL|SparkMax|SparkFlex|REV)/([A-Za-z0-9_\\-]+?)(?:[-_/](\\d+))?/([A-Za-z0-9_]+)$");
 
   /**
-   * Loads a custom {@link RobotProfile} from a JSON file (`--profile <path>` or
-   * `robot-profile.json`).
-   *
-   * <p>Supported JSON structure:
-   *
-   * <pre>
-   * {
-   *   "robotName": "KRAKEN_BOT",
-   *   "pigeonId": 1,
-   *   "wheelRadiusMeters": 0.0508,
-   *   "driveGearRatio": 6.12,
-   *   "corners": {
-   *     "FL": { "driveId": 10, "steerId": 11, "cancoderId": 12 },
-   *     "FR": { "driveId": 20, "steerId": 21, "cancoderId": 22 },
-   *     "BL": { "driveId": 30, "steerId": 31, "cancoderId": 32 },
-   *     "BR": { "driveId": 40, "steerId": 41, "cancoderId": 42 }
-   *   },
-   *   "mechanisms": [
-   *     { "name": "Elevator", "motorId": 50, "role": "Position Lift", "currentLimitAmps": 60.0, "isShooter": false },
-   *     { "name": "Flywheel", "motorId": 51, "role": "Flywheel Leader", "currentLimitAmps": 80.0, "isShooter": true }
-   *   ]
-   * }
-   * </pre>
+   * Hydrates a {@link RobotProfile} directly from a {@link FluxFig} instance (loaded from a CSV
+   * directory or reconstructed via {@link FluxFig#fromEffectiveSnapshot(String)}).
+   */
+  public static RobotProfile fromFluxFig(FluxFig fig, String requestedRobot) {
+    return fromFluxFig(fig, requestedRobot, Set.of());
+  }
+
+  /**
+   * Hydrates a {@link RobotProfile} from a {@link FluxFig} instance and adapts topic paths to the
+   * actual topics present in {@code availableTopics} (supporting both raw {@code Phoenix6/TalonFX-*}
+   * and AdvantageKit {@code /Drive/Module0..3/*} + {@code /Mechanisms/<Name>/*} topics).
+   */
+  public static RobotProfile fromFluxFig(
+      FluxFig fig, String requestedRobot, Set<String> availableTopics) {
+    String profile = resolveFluxFigProfileName(fig, requestedRobot);
+    fig.setActiveProfile(profile);
+
+    int defaultPigeon = "CORAL".equalsIgnoreCase(profile) ? 24 : 20;
+    int pigeonId = getIntOrDefault(fig, "pigeonId", defaultPigeon);
+    double wheelRadius = getDoubleOrDefault(fig, "wheelRadiusMeters", 0.0508);
+    double gearRatio = getDoubleOrDefault(fig, "driveGearRatio", 6.394736842105262);
+
+    Map<String, CornerConfig> defaultCorners =
+        "CORAL".equalsIgnoreCase(profile) ? CORAL.corners() : FUEL.corners();
+    Map<String, CornerConfig> corners = new LinkedHashMap<>();
+    String[][] cornerDefs = {
+      {"FL", "flDriveId", "flSteerId", "flCancoderId", "0", "FrontLeft"},
+      {"FR", "frDriveId", "frSteerId", "frCancoderId", "1", "FrontRight"},
+      {"BL", "blDriveId", "blSteerId", "blCancoderId", "2", "BackLeft"},
+      {"BR", "brDriveId", "brSteerId", "brCancoderId", "3", "BackRight"}
+    };
+
+    for (String[] def : cornerDefs) {
+      String cKey = def[0];
+      CornerConfig fallback = defaultCorners.get(cKey);
+      int dId = getIntOrDefault(fig, def[1], fallback != null ? fallback.driveMotorId() : 1);
+      int sId = getIntOrDefault(fig, def[2], fallback != null ? fallback.steerMotorId() : 2);
+      int cId = getIntOrDefault(fig, def[3], fallback != null ? fallback.cancoderId() : 21);
+
+      String idx = def[4];
+      String longName = def[5];
+      String dStator =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  "Phoenix6/TalonFX-" + dId + "/StatorCurrent",
+                  "Drive/Module" + idx + "/DriveCurrentAmps",
+                  "Drive/Module" + cKey + "/DriveCurrentAmps",
+                  "Drive/Module" + longName + "/DriveCurrentAmps"),
+              "Phoenix6/TalonFX-" + dId + "/StatorCurrent");
+      String dSupply =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  "Phoenix6/TalonFX-" + dId + "/SupplyCurrent",
+                  "Drive/Module" + idx + "/DriveSupplyCurrentAmps",
+                  "Drive/Module" + cKey + "/DriveSupplyCurrentAmps"),
+              "Phoenix6/TalonFX-" + dId + "/SupplyCurrent");
+      String dVel =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  "Phoenix6/TalonFX-" + dId + "/Velocity",
+                  "Drive/Module" + idx + "/DriveVelocityRadPerSec",
+                  "Drive/Module" + idx + "/DriveVelocityMetersPerSec",
+                  "Drive/Module" + idx + "/DriveVelocityRps",
+                  "Drive/Module" + cKey + "/DriveVelocityRadPerSec"),
+              "Phoenix6/TalonFX-" + dId + "/Velocity");
+      String sStator =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  "Phoenix6/TalonFX-" + sId + "/StatorCurrent",
+                  "Drive/Module" + idx + "/TurnCurrentAmps",
+                  "Drive/Module" + idx + "/SteerCurrentAmps",
+                  "Drive/Module" + cKey + "/TurnCurrentAmps"),
+              sId > 0 ? "Phoenix6/TalonFX-" + sId + "/StatorCurrent" : "");
+
+      corners.put(cKey, new CornerConfig(cKey, dId, sId, cId, dStator, dSupply, dVel, sStator));
+    }
+
+    List<MechMotorSpec> mechanisms = new ArrayList<>();
+    if (fig.getTableNames().contains("mechanisms")) {
+      List<FluxFig.MechanismSpec> specs =
+          fig.bindTable("mechanisms", profile, FluxFig.MechanismSpec.class);
+      for (FluxFig.MechanismSpec m : specs) {
+        String name = m.mechanism();
+        String lower = name.toLowerCase(Locale.ROOT);
+        boolean isShooter =
+            lower.contains("shooter") || lower.contains("flywheel") || lower.contains("launcher");
+        String role =
+            isShooter
+                ? (m.followerMotorId() > 0 ? "Flywheel Leader" : "Shooter / Flywheel")
+                : ("Elevator_Static".equalsIgnoreCase(m.gravityType())
+                    ? "Position Elevator"
+                    : ("Arm_Cosine".equalsIgnoreCase(m.gravityType())
+                        ? "Position Arm/Pivot"
+                        : "Mechanism"));
+
+        String statorT =
+            resolveFirstAvailableOrDefault(
+                availableTopics,
+                List.of(
+                    "Phoenix6/TalonFX-" + m.motorId() + "/StatorCurrent",
+                    "Mechanisms/" + name + "/LeaderStatorAmps",
+                    "Mechanisms/" + name + "/StatorCurrentAmps",
+                    name + "/LeaderStatorAmps",
+                    name + "/CurrentAmps"),
+                "Phoenix6/TalonFX-" + m.motorId() + "/StatorCurrent");
+        String supplyT =
+            resolveFirstAvailableOrDefault(
+                availableTopics,
+                List.of(
+                    "Phoenix6/TalonFX-" + m.motorId() + "/SupplyCurrent",
+                    "Mechanisms/" + name + "/LeaderSupplyAmps",
+                    "Mechanisms/" + name + "/SupplyCurrentAmps",
+                    name + "/LeaderSupplyAmps"),
+                "Phoenix6/TalonFX-" + m.motorId() + "/SupplyCurrent");
+        String velT =
+            resolveFirstAvailableOrDefault(
+                availableTopics,
+                List.of(
+                    "Phoenix6/TalonFX-" + m.motorId() + "/Velocity",
+                    "Mechanisms/" + name + "/VelocityRps",
+                    "Mechanisms/" + name + "/LeaderVelocityRps",
+                    name + "/VelocityRps"),
+                "Phoenix6/TalonFX-" + m.motorId() + "/Velocity");
+        String posT =
+            resolveFirstAvailableOrDefault(
+                availableTopics,
+                List.of(
+                    "Phoenix6/TalonFX-" + m.motorId() + "/Position",
+                    "Mechanisms/" + name + "/PositionRot",
+                    "Mechanisms/" + name + "/PositionRotations",
+                    name + "/PositionRot"),
+                "Phoenix6/TalonFX-" + m.motorId() + "/Position");
+        String resetT =
+            resolveFirstAvailableOrDefault(
+                availableTopics,
+                List.of(
+                    "Phoenix6/TalonFX-" + m.motorId() + "/ResetCount",
+                    "Mechanisms/" + name + "/ResetCount"),
+                "Phoenix6/TalonFX-" + m.motorId() + "/ResetCount");
+
+        mechanisms.add(
+            new MechMotorSpec(
+                name,
+                m.motorId(),
+                role,
+                m.statorLimitAmps(),
+                isShooter,
+                statorT,
+                supplyT,
+                velT,
+                posT,
+                resetT));
+
+        if (m.followerMotorId() > 0) {
+          String fName = name + " Follower";
+          String fStator =
+              resolveFirstAvailableOrDefault(
+                  availableTopics,
+                  List.of(
+                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/StatorCurrent",
+                      "Mechanisms/" + name + "/FollowerStatorAmps"),
+                  "Phoenix6/TalonFX-" + m.followerMotorId() + "/StatorCurrent");
+          String fSupply =
+              resolveFirstAvailableOrDefault(
+                  availableTopics,
+                  List.of(
+                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/SupplyCurrent",
+                      "Mechanisms/" + name + "/FollowerSupplyAmps"),
+                  "Phoenix6/TalonFX-" + m.followerMotorId() + "/SupplyCurrent");
+          String fVel =
+              resolveFirstAvailableOrDefault(
+                  availableTopics,
+                  List.of(
+                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/Velocity",
+                      "Mechanisms/" + name + "/FollowerVelocityRps",
+                      velT),
+                  "Phoenix6/TalonFX-" + m.followerMotorId() + "/Velocity");
+          mechanisms.add(
+              new MechMotorSpec(
+                  fName,
+                  m.followerMotorId(),
+                  isShooter ? "Flywheel Follower" : "Mechanism Follower",
+                  m.statorLimitAmps(),
+                  isShooter,
+                  fStator,
+                  fSupply,
+                  fVel,
+                  posT,
+                  resetT));
+        }
+      }
+    }
+
+    return new RobotProfile(profile, pigeonId, wheelRadius, gearRatio, corners, mechanisms);
+  }
+
+  public static RobotProfile fromFluxFigDirectory(Path configDir, String requestedRobot) {
+    FluxFig fig =
+        (requestedRobot != null
+                && !requestedRobot.isBlank()
+                && !"AUTO".equalsIgnoreCase(requestedRobot))
+            ? FluxFig.load(configDir, requestedRobot)
+            : FluxFig.load(configDir);
+    return fromFluxFig(fig, requestedRobot, Set.of());
+  }
+
+  private static String resolveFluxFigProfileName(FluxFig fig, String requestedRobot) {
+    if (requestedRobot != null
+        && !requestedRobot.isBlank()
+        && !"AUTO".equalsIgnoreCase(requestedRobot)) {
+      return requestedRobot;
+    }
+    String active = fig.getActiveProfile();
+    if (active != null && !active.isBlank() && !"DEFAULT".equalsIgnoreCase(active)) {
+      return active;
+    }
+    if (fig.getTableNames().contains("mechanisms")) {
+      for (Map<String, String> row : fig.getTable("mechanisms")) {
+        String r = row.get("robot");
+        if (r != null && !r.isBlank()) {
+          return r.trim();
+        }
+      }
+    }
+    return "COMP_2027";
+  }
+
+  public static int getIntOrDefault(FluxFig fig, String key, int fallback) {
+    try {
+      return fig.getInt(key);
+    } catch (RuntimeException e) {
+      return fallback;
+    }
+  }
+
+  public static double getDoubleOrDefault(FluxFig fig, String key, double fallback) {
+    try {
+      return fig.getDouble(key);
+    } catch (RuntimeException e) {
+      return fallback;
+    }
+  }
+
+  private static String resolveFirstAvailableOrDefault(
+      Set<String> availableTopics, List<String> candidates, String defaultTopic) {
+    if (availableTopics != null && !availableTopics.isEmpty()) {
+      String found = findFirstMatchingTopic(availableTopics, candidates);
+      if (found != null) {
+        return found;
+      }
+    }
+    return defaultTopic;
+  }
+
+  /**
+   * Loads a custom {@link RobotProfile} from a JSON file ({@code --profile <path>} or {@code
+   * robot-profile.json}).
    */
   public static RobotProfile fromJson(Path jsonPath) throws IOException {
     String json = Files.readString(jsonPath, StandardCharsets.UTF_8);
@@ -266,19 +509,55 @@ public record RobotProfile(
 
   /**
    * Resolves the effective {@link RobotProfile} for a given run directory and its parsed logs.
-   *
-   * <ul>
-   *   <li>If {@code runDir/robot-profile.json} exists (and {@code requested} is {@link #AUTO}),
-   *       loads the JSON profile.
-   *   <li>If {@code requested} has non-empty corners (e.g., explicit {@code FUEL}, {@code CORAL},
-   *       or {@code --profile}), checks whether those topics actually exist in {@code allLogs}; if
-   *       none match (e.g., another team ran {@code FluxProcessor} without flags on their own
-   *       AdvantageKit/REV/CTRE logs), falls back to auto-discovery so metrics are never blank.
-   * </ul>
    */
   public static RobotProfile resolveForLogs(
       RobotProfile requested, List<ParsedLog> allLogs, Path runDir) {
+    Set<String> allTopics = new LinkedHashSet<>();
+    for (ParsedLog log : allLogs) {
+      allTopics.addAll(log.entriesByName().keySet());
+      allTopics.addAll(log.allDoubleSeries().keySet());
+    }
+
+    String requestedName =
+        (requested != null && !"AUTO".equalsIgnoreCase(requested.robotName()))
+            ? requested.robotName()
+            : null;
+
+    // 1. Check for embedded /FluxFig/EffectiveSnapshot inside the .wpilog files
+    String snapshotText = extractFluxFigSnapshotFromLogs(allLogs);
+    if (snapshotText != null && !snapshotText.isBlank()) {
+      try {
+        FluxFig fig = FluxFig.fromEffectiveSnapshot(snapshotText);
+        String explicitLogRobot = extractRobotIdentityFromLogs(allLogs);
+        String targetProfile = requestedName != null ? requestedName : explicitLogRobot;
+        return fromFluxFig(fig, targetProfile, allTopics);
+      } catch (RuntimeException ignored) {
+      }
+    }
+
+    // 2. Check for local FluxFig CSV directory or robot-profile.json in runDir
     if (runDir != null) {
+      Path configsSubdir = runDir.resolve("configs");
+      if (Files.isDirectory(configsSubdir)
+          && Files.exists(configsSubdir.resolve("parameters.csv"))) {
+        try {
+          FluxFig fig =
+              requestedName != null
+                  ? FluxFig.load(configsSubdir, requestedName)
+                  : FluxFig.load(configsSubdir);
+          return fromFluxFig(fig, requestedName, allTopics);
+        } catch (RuntimeException ignored) {
+        }
+      }
+      if (Files.exists(runDir.resolve("parameters.csv"))) {
+        try {
+          FluxFig fig =
+              requestedName != null ? FluxFig.load(runDir, requestedName) : FluxFig.load(runDir);
+          return fromFluxFig(fig, requestedName, allTopics);
+        } catch (RuntimeException ignored) {
+        }
+      }
+
       Path localProfile = runDir.resolve("robot-profile.json");
       Path parentProfile =
           runDir.getParent() != null ? runDir.getParent().resolve("robot-profile.json") : null;
@@ -295,13 +574,7 @@ public record RobotProfile(
       }
     }
 
-    Set<String> allTopics = new LinkedHashSet<>();
-    for (ParsedLog log : allLogs) {
-      allTopics.addAll(log.entriesByName().keySet());
-      allTopics.addAll(log.allDoubleSeries().keySet());
-    }
-
-    // If an explicit profile was given and its drive topics exist in the logs, use it as-is
+    // 3. If an explicit profile was given and its drive topics exist in the logs, use it as-is
     if (requested != null
         && !"AUTO".equals(requested.robotName())
         && !requested.corners().isEmpty()
@@ -309,8 +582,8 @@ public record RobotProfile(
       return requested;
     }
 
-    // Check if logs match Team 10413 FUEL or CORAL presets
-    if ( allTopics.contains("Phoenix6/Pigeon2-20/Yaw")
+    // 4. Check if logs match Team 10413 FUEL or CORAL presets
+    if (allTopics.contains("Phoenix6/Pigeon2-20/Yaw")
         || allTopics.contains("Phoenix6/Pigeon2-20/SupplyVoltage")
         || (allTopics.contains("Phoenix6/TalonFX-2/StatorCurrent")
             && allTopics.contains("Phoenix6/TalonFX-11/Velocity"))) {
@@ -341,7 +614,7 @@ public record RobotProfile(
           CORAL.mechanisms());
     }
 
-    // Auto-discover from arbitrary FRC team logs (AdvantageKit, Phoenix 6, REV URCL, or generic)
+    // 5. Auto-discover from arbitrary FRC team logs (AdvantageKit, Phoenix 6, REV URCL, or generic)
     String inferredName =
         (requested != null
                 && !"AUTO".equals(requested.robotName())
@@ -349,6 +622,47 @@ public record RobotProfile(
             ? requested.robotName()
             : inferRobotNameFromLogs(allLogs, runDir);
     return autoDiscoverProfile(inferredName, allLogs, allTopics);
+  }
+
+  public static String extractFluxFigSnapshotFromLogs(List<ParsedLog> allLogs) {
+    String[] keys = {
+      "/FluxFig/EffectiveSnapshot",
+      "FluxFig/EffectiveSnapshot",
+      "/AdvantageKit/RealOutputs/FluxFig/EffectiveSnapshot",
+      "/RealOutputs/FluxFig/EffectiveSnapshot"
+    };
+    for (ParsedLog log : allLogs) {
+      for (String k : keys) {
+        List<StringSample> s = log.getStringSeries(k);
+        if (!s.isEmpty() && !s.get(s.size() - 1).value().isBlank()) {
+          return s.get(s.size() - 1).value();
+        }
+      }
+    }
+    return null;
+  }
+
+  private static String extractRobotIdentityFromLogs(List<ParsedLog> allLogs) {
+    String[] keys = {
+      "/FluxFig/ActiveProfile",
+      "FluxFig/ActiveProfile",
+      "/AdvantageKit/RealOutputs/FluxFig/ActiveProfile",
+      "/RealOutputs/FluxFig/ActiveProfile",
+      "/RobotIdentity/Id",
+      "RobotIdentity/Id",
+      "/AdvantageKit/Robot",
+      "/RealOutputs/Robot",
+      "Robot"
+    };
+    for (ParsedLog log : allLogs) {
+      for (String k : keys) {
+        List<StringSample> s = log.getStringSeries(k);
+        if (!s.isEmpty() && !s.get(0).value().isBlank()) {
+          return s.get(0).value().trim();
+        }
+      }
+    }
+    return null;
   }
 
   private static boolean matchesAnyCornerTopic(RobotProfile profile, Set<String> allTopics) {
@@ -403,7 +717,7 @@ public record RobotProfile(
     // 1. Check AdvantageKit / Swerve Module0..3 or ModuleFL..BR topics first
     Map<String, CornerConfig> akitCorners = discoverAdvantageKitCorners(allTopics);
     if (akitCorners.size() == 4) {
-      List<MechMotorSpec> mechs = discoverGenericMechanisms(allTopics, Set.of());
+      List<MechMotorSpec> mechs = discoverGenericMechanisms(allTopics);
       return new RobotProfile(robotName, pigeonId, 0.0508, 6.12, akitCorners, mechs);
     }
 
@@ -413,7 +727,7 @@ public record RobotProfile(
     for (ParsedLog log : allLogs) {
       String fName = log.sourcePath().getFileName().toString().toLowerCase(Locale.ROOT);
       boolean isDriveFile = fName.contains("drive") || fName.contains("swerve");
-      for (String t : log. allDoubleSeries().keySet()) {
+      for (String t : log.allDoubleSeries().keySet()) {
         Matcher tm = TALON_PATTERN.matcher(t);
         if (tm.find()) {
           int id = Integer.parseInt(tm.group(1));
@@ -430,7 +744,6 @@ public record RobotProfile(
     Set<Integer> usedCornerIds = new LinkedHashSet<>();
 
     if (candidateDriveBus.size() >= 4) {
-      // Rank TalonFX IDs by mean active velocity to separate the 4 drive motors from steer/mech motors
       List<Integer> sortedByVel = new ArrayList<>(candidateDriveBus);
       sortedByVel.sort(
           Comparator.comparingDouble(
@@ -467,7 +780,7 @@ public record RobotProfile(
     }
 
     if (mechanisms.isEmpty()) {
-      mechanisms.addAll(discoverGenericMechanisms(allTopics, usedCornerIds));
+      mechanisms.addAll(discoverGenericMechanisms(allTopics));
     }
 
     return new RobotProfile(robotName, pigeonId, 0.0508, 6.12, corners, mechanisms);
@@ -533,8 +846,7 @@ public record RobotProfile(
     return corners;
   }
 
-  private static List<MechMotorSpec> discoverGenericMechanisms(
-      Set<String> allTopics, Set<Integer> excludeIds) {
+  private static List<MechMotorSpec> discoverGenericMechanisms(Set<String> allTopics) {
     List<MechMotorSpec> mechs = new ArrayList<>();
     Map<String, String> statorBySubsys = new LinkedHashMap<>();
     Map<String, String> velBySubsys = new LinkedHashMap<>();
@@ -542,7 +854,12 @@ public record RobotProfile(
 
     for (String t : allTopics) {
       String lower = t.toLowerCase(Locale.ROOT);
-      if (lower.contains("drive") || lower.contains("swerve") || lower.contains("module") || lower.contains("systemstats")) {
+      if (lower.contains("drive")
+          || lower.contains("swerve")
+          || lower.contains("module")
+          || lower.contains("systemstats")
+          || lower.contains("shopstress")
+          || lower.contains("geofence")) {
         continue;
       }
       int lastSlash = t.lastIndexOf('/');
@@ -564,7 +881,11 @@ public record RobotProfile(
     for (Map.Entry<String, String> e : statorBySubsys.entrySet()) {
       String prefix = e.getKey();
       String cleanName = prefix.startsWith("/") ? prefix.substring(1) : prefix;
-      cleanName = cleanName.replace("AdvantageKit/RealOutputs/", "").replace("RealOutputs/", "");
+      cleanName =
+          cleanName
+              .replace("AdvantageKit/RealOutputs/", "")
+              .replace("RealOutputs/", "")
+              .replace("Mechanisms/", "");
       String statorT = e.getValue();
       String velT = velBySubsys.getOrDefault(prefix, "");
       String posT = posBySubsys.getOrDefault(prefix, "");
@@ -641,7 +962,9 @@ public record RobotProfile(
   }
 
   private static boolean extractBoolean(String json, String key, boolean fallback) {
-    Pattern p = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*(true|false)", Pattern.CASE_INSENSITIVE);
+    Pattern p =
+        Pattern.compile(
+            "\"" + Pattern.quote(key) + "\"\\s*:\\s*(true|false)", Pattern.CASE_INSENSITIVE);
     Matcher m = p.matcher(json);
     return m.find() ? Boolean.parseBoolean(m.group(1)) : fallback;
   }

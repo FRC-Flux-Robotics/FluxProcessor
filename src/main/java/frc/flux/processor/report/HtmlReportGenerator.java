@@ -2,8 +2,11 @@ package frc.flux.processor.report;
 
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
+import frc.flux.processor.model.RunAnalysisReport.CameraSnapshotRef;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
+import frc.flux.processor.model.RunAnalysisReport.ElevatorCycleEvent;
 import frc.flux.processor.model.RunAnalysisReport.MechanismMetrics;
+import frc.flux.processor.model.RunAnalysisReport.ShopStressGateMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ShotEvent;
 import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
 import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
@@ -109,7 +112,11 @@ public final class HtmlReportGenerator {
         .append(esc(r.allianceStation()))
         .append(")  •  Named Battery: <strong>")
         .append(esc(r.namedBattery()))
-        .append("</strong>  •  Merged Log: <code>merged.wpilog</code></div>\n")
+        .append("</strong>  •  Git: <code>")
+        .append(esc(r.gitSha()))
+        .append("</code>  •  Config: <code>")
+        .append(esc(r.configSha()))
+        .append("</code>  •  Merged Log: <code>merged.wpilog</code></div>\n")
         .append("      </div>\n")
         .append("    </div>\n")
         .append("    <div class=\"badge\" style=\"background:")
@@ -129,12 +136,19 @@ public final class HtmlReportGenerator {
     sb.append("    </ul>\n  </div>\n");
 
     // KPI Cards
+    int totalCycles = r.shots().size() + (r.elevatorCycles() != null ? r.elevatorCycles().size() : 0);
+    String cyclesLabel =
+        (r.elevatorCycles() != null && !r.elevatorCycles().isEmpty() && r.shots().isEmpty())
+            ? "Elevator Cycles"
+            : "Detected Shots / Cycles";
+
     sb.append("  <div class=\"kpis\">\n")
         .append(
             kpiCard(
                 "Named Battery",
                 b.batteryName(),
-                String.format(Locale.US, "Est. R_int: %.1f mΩ (%s)", b.estimatedRintMilliOhms(), b.healthGrade())))
+                String.format(
+                    Locale.US, "Est. R_int: %.1f mΩ (%s)", b.estimatedRintMilliOhms(), b.healthGrade())))
         .append(
             kpiCard(
                 "Min Battery Voltage",
@@ -161,24 +175,70 @@ public final class HtmlReportGenerator {
                 String.format(Locale.US, "Peak Speed: %.2f m/s", r.peakSpeedMps())))
         .append(
             kpiCard(
-                "Detected Shots",
-                String.valueOf(r.shots().size()),
-                String.format(Locale.US, "Enabled: %.1fs / %.1fs", r.enabledDurationSec(), r.totalDurationSec())))
+                cyclesLabel,
+                String.valueOf(totalCycles),
+                String.format(
+                    Locale.US, "Enabled: %.1fs / %.1fs", r.enabledDurationSec(), r.totalDurationSec())))
         .append("  </div>\n");
 
     // Interactive Timeline Canvas
     sb.append("  <div class=\"card\">\n")
-        .append("    <h2><span>Battery Voltage (V), Total Drive Stator Current (A) &amp; Shooter Speed (RPS)</span>")
-        .append("<span style=\"font-size:12px;font-weight:400;color:var(--muted)\"> Green = Voltage (V) • Blue = Total Stator Current (A) • Gold = Shot Events • Red Dashed = 6.8V Brownout</span></h2>\n")
+        .append(
+            "    <h2><span>Battery Voltage (V), Total Drive Stator Current (A) &amp; Shooter Speed (RPS)</span>")
+        .append(
+            "<span style=\"font-size:12px;font-weight:400;color:var(--muted)\"> Green = Voltage (V) • Blue = Total Stator Current (A) • Gold = Shot Events • Red Dashed = 6.8V Brownout</span></h2>\n")
         .append("    <canvas id=\"timelineCanvas\" width=\"1180\" height=\"220\"></canvas>\n")
         .append("  </div>\n");
 
+    // 5m x 3m ShopStressSuiteCmd & VirtualGeofence Pass Gate Card (when present)
+    if (r.shopStressGate() != null && r.shopStressGate().present()) {
+      ShopStressGateMetrics sg = r.shopStressGate();
+      String sgPill =
+          "FAIL".equals(sg.overallGateStatus())
+              ? "pill-fail"
+              : ("WARN".equals(sg.overallGateStatus()) ? "pill-warn" : "pill-pass");
+      sb.append("  <div class=\"card\">\n")
+          .append(
+              "    <h2><span>5m x 3m ShopStressSuiteCmd &amp; VirtualGeofence Pass Gate</span>")
+          .append("<span class=\"pill ")
+          .append(sgPill)
+          .append("\">GATE: ")
+          .append(esc(sg.overallGateStatus()))
+          .append("</span></h2>\n")
+          .append("    <table>\n")
+          .append(
+              "      <thead><tr><th>VirtualGeofence Breaches</th><th>Figure-8 Loop Closure Drift</th><th>Max Camera Handoff Step</th><th>Box-Step 4-Corner Spread</th><th>Overall Gate</th></tr></thead>\n")
+          .append("      <tbody><tr>\n")
+          .append("        <td><strong>")
+          .append(sg.geofenceBreachCount())
+          .append("</strong> (limit: 0)</td>\n")
+          .append("        <td><strong>")
+          .append(String.format(Locale.US, "%.2f cm", sg.figure8LoopClosureDriftCm()))
+          .append("</strong> (&le; 4.0 cm)</td>\n")
+          .append("        <td><strong>")
+          .append(String.format(Locale.US, "%.2f cm", sg.maxCameraHandoffStepCm()))
+          .append("</strong> (&le; 3.0 cm)</td>\n")
+          .append("        <td><strong>")
+          .append(String.format(Locale.US, "%.1f%%", sg.cornerCurrentSpreadPct()))
+          .append("</strong> (&le; 12.0%)</td>\n")
+          .append("        <td><span class=\"pill ")
+          .append(sgPill)
+          .append("\">")
+          .append(esc(sg.overallGateStatus()))
+          .append("</span></td>\n")
+          .append("      </tr></tbody>\n    </table>\n")
+          .append("  </div>\n");
+    }
+
     // 6-Second Lookback Voice-to-Sensor Correlation Table
     sb.append("  <div class=\"card\">\n")
-        .append("    <h2><span>Part 3: Voice Feedback &amp; 6-Second Sensor Lookback Correlation</span>")
-        .append("<span style=\"font-size:12px;font-weight:400;color:var(--muted)\">Driver / Operator / Coach Tracks + Auto-Telemetry Checkpoints</span></h2>\n")
+        .append(
+            "    <h2><span>Part 3: Voice Feedback &amp; 6-Second Sensor Lookback Correlation</span>")
+        .append(
+            "<span style=\"font-size:12px;font-weight:400;color:var(--muted)\">Driver / Operator / Coach Tracks + Auto-Telemetry Checkpoints</span></h2>\n")
         .append("    <table>\n")
-        .append("      <thead><tr><th>Speaker / Role</th><th>Spoken Time</th><th>Spoken Comment / Trigger</th><th>6-Sec Lookback Event</th><th>Sensor Root-Cause Diagnosis</th><th>Video</th></tr></thead>\n")
+        .append(
+            "      <thead><tr><th>Speaker / Role</th><th>Spoken Time</th><th>Spoken Comment / Trigger</th><th>6-Sec Lookback Event</th><th>Sensor Root-Cause Diagnosis</th><th>Video</th></tr></thead>\n")
         .append("      <tbody>\n");
     for (VoiceCorrelation vc : r.voiceCorrelations()) {
       String pillClass =
@@ -186,16 +246,29 @@ public final class HtmlReportGenerator {
               ? "pill-fail"
               : ("WARN".equals(vc.severity()) ? "pill-warn" : "pill-pass");
       sb.append("        <tr>\n")
-          .append("          <td><span class=\"pill ").append(pillClass).append("\">")
-          .append(esc(vc.speakerRole())).append("</span></td>\n")
-          .append("          <td><strong>").append(String.format(Locale.US, "%.1fs", vc.spokenTimeSec())).append("</strong></td>\n")
-          .append("          <td>\"").append(esc(vc.transcript())).append("\"</td>\n")
-          .append("          <td>").append(esc(vc.correlatedEventSummary())).append("</td>\n")
-          .append("          <td>").append(esc(vc.sensorDiagnosis())).append("</td>\n")
+          .append("          <td><span class=\"pill ")
+          .append(pillClass)
+          .append("\">")
+          .append(esc(vc.speakerRole()))
+          .append("</span></td>\n")
+          .append("          <td><strong>")
+          .append(String.format(Locale.US, "%.1fs", vc.spokenTimeSec()))
+          .append("</strong></td>\n")
+          .append("          <td>\"")
+          .append(esc(vc.transcript()))
+          .append("\"</td>\n")
+          .append("          <td>")
+          .append(esc(vc.correlatedEventSummary()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(esc(vc.sensorDiagnosis()))
+          .append("</td>\n")
           .append("          <td>")
           .append(
               vc.videoLink() != null && !vc.videoLink().isEmpty()
-                  ? "<a class=\"btn-link\" target=\"_blank\" href=\"" + esc(vc.videoLink()) + "\">▶ Watch</a>"
+                  ? "<a class=\"btn-link\" target=\"_blank\" href=\""
+                      + esc(vc.videoLink())
+                      + "\">▶ Watch</a>"
                   : "—")
           .append("</td>\n")
           .append("        </tr>\n");
@@ -209,7 +282,8 @@ public final class HtmlReportGenerator {
     sb.append("    <div class=\"card\">\n")
         .append("      <h2>4-Corner Swerve Symmetry Audit</h2>\n")
         .append("      <table>\n")
-        .append("        <thead><tr><th>Corner</th><th>CAN IDs</th><th>Mean Drive (A)</th><th>Peak Drive (A)</th><th>Peak Vel (RPS)</th><th>Mean Steer (A)</th><th>Asymmetry</th><th>Status</th></tr></thead>\n")
+        .append(
+            "        <thead><tr><th>Corner</th><th>CAN IDs</th><th>Mean Drive (A)</th><th>Peak Drive (A)</th><th>Peak Vel (RPS)</th><th>Mean Steer (A)</th><th>Asymmetry</th><th>Status</th></tr></thead>\n")
         .append("        <tbody>\n");
     for (CornerMetrics c : r.swerveCorners()) {
       String pill =
@@ -217,69 +291,219 @@ public final class HtmlReportGenerator {
               ? "pill-fail"
               : ("WARN".equals(c.status()) ? "pill-warn" : "pill-pass");
       sb.append("          <tr>\n")
-          .append("            <td><strong>").append(esc(c.corner())).append("</strong></td>\n")
-          .append("            <td>D:").append(c.driveId()).append(" / S:").append(c.steerId()).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.1f A", c.meanDriveStatorAmps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.0f A", c.peakDriveStatorAmps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.1f", c.peakDriveVelocityRps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.1f A", c.meanSteerStatorAmps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%+.1f%%", c.driveAsymmetryPct())).append("</td>\n")
-          .append("            <td><span class=\"pill ").append(pill).append("\">").append(esc(c.status())).append("</span></td>\n")
+          .append("            <td><strong>")
+          .append(esc(c.corner()))
+          .append("</strong></td>\n")
+          .append("            <td>D:")
+          .append(c.driveId())
+          .append(" / S:")
+          .append(c.steerId())
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.1f A", c.meanDriveStatorAmps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.0f A", c.peakDriveStatorAmps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.1f", c.peakDriveVelocityRps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.1f A", c.meanSteerStatorAmps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%+.1f%%", c.driveAsymmetryPct()))
+          .append("</td>\n")
+          .append("            <td><span class=\"pill ")
+          .append(pill)
+          .append("\">")
+          .append(esc(c.status()))
+          .append("</span></td>\n")
           .append("          </tr>\n");
     }
     sb.append("        </tbody>\n      </table>\n    </div>\n");
 
     // Right: Mechanism Health Audit
     sb.append("    <div class=\"card\">\n")
-        .append("      <h2>Mechanism Health Audit (Mech CANivore)</h2>\n")
+        .append("      <h2>Mechanism Health Audit</h2>\n")
         .append("      <table>\n")
-        .append("        <thead><tr><th>Mechanism</th><th>ID</th><th>Mean (A)</th><th>Peak (A)</th><th>Peak Vel (RPS)</th><th>Pos Range</th><th>Resets</th><th>Status</th></tr></thead>\n")
+        .append(
+            "        <thead><tr><th>Mechanism</th><th>ID</th><th>Mean (A)</th><th>Peak (A)</th><th>Peak Vel (RPS)</th><th>Pos Range</th><th>Resets</th><th>Status</th></tr></thead>\n")
         .append("        <tbody>\n");
     for (MechanismMetrics m : r.mechanisms()) {
       String pill = "WARN".equals(m.status()) ? "pill-warn" : "pill-pass";
       sb.append("          <tr>\n")
-          .append("            <td><strong>").append(esc(m.name())).append("</strong></td>\n")
-          .append("            <td>").append(m.motorId()).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.1f A", m.meanStatorAmps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.0f A", m.peakStatorAmps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "%.1f", m.peakVelocityRps())).append("</td>\n")
-          .append("            <td>").append(String.format(Locale.US, "[%.1f .. %.1f]", m.minPositionRot(), m.maxPositionRot())).append("</td>\n")
-          .append("            <td>").append(m.resetCount()).append("</td>\n")
-          .append("            <td><span class=\"pill ").append(pill).append("\">").append(esc(m.status())).append("</span></td>\n")
+          .append("            <td><strong>")
+          .append(esc(m.name()))
+          .append("</strong></td>\n")
+          .append("            <td>")
+          .append(m.motorId())
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.1f A", m.meanStatorAmps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.0f A", m.peakStatorAmps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(String.format(Locale.US, "%.1f", m.peakVelocityRps()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(
+              String.format(Locale.US, "[%.1f .. %.1f]", m.minPositionRot(), m.maxPositionRot()))
+          .append("</td>\n")
+          .append("            <td>")
+          .append(m.resetCount())
+          .append("</td>\n")
+          .append("            <td><span class=\"pill ")
+          .append(pill)
+          .append("\">")
+          .append(esc(m.status()))
+          .append("</span></td>\n")
           .append("          </tr>\n");
     }
     sb.append("        </tbody>\n      </table>\n    </div>\n  </div>\n");
+
+    // 2027 Elevator + Arm Scoring Cycles Table (when present)
+    if (r.elevatorCycles() != null && !r.elevatorCycles().isEmpty()) {
+      sb.append("  <div class=\"card\">\n")
+          .append("    <h2><span>2027 Elevator + Arm Scoring Cycles (")
+          .append(r.elevatorCycles().size())
+          .append(
+              ")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">L1..L4 Extension &amp; Keep-Out Interlock Audit</span></h2>\n")
+          .append("    <table>\n")
+          .append(
+              "      <thead><tr><th>Cycle #</th><th>Level</th><th>Start (s)</th><th>Duration</th><th>Peak Elevator (rot)</th><th>Peak Arm (rot)</th><th>Peak Stator (A)</th><th>Min Battery (V)</th><th>Keep-Out Interlock</th><th>Status</th></tr></thead>\n")
+          .append("      <tbody>\n");
+      for (ElevatorCycleEvent ec : r.elevatorCycles()) {
+        String pill = "NOMINAL".equals(ec.status()) ? "pill-pass" : "pill-warn";
+        sb.append("        <tr>\n")
+            .append("          <td><strong>#")
+            .append(ec.cycleNumber())
+            .append("</strong></td>\n")
+            .append("          <td><strong>")
+            .append(esc(ec.targetLevel()))
+            .append("</strong></td>\n")
+            .append("          <td>")
+            .append(String.format(Locale.US, "%.1fs", ec.startTimeSec()))
+            .append("</td>\n")
+            .append("          <td>")
+            .append(String.format(Locale.US, "%.2fs", ec.durationSec()))
+            .append("</td>\n")
+            .append("          <td>")
+            .append(String.format(Locale.US, "%.1f", ec.peakElevatorPosRot()))
+            .append("</td>\n")
+            .append("          <td>")
+            .append(String.format(Locale.US, "%.2f", ec.peakArmPosRot()))
+            .append("</td>\n")
+            .append("          <td>")
+            .append(String.format(Locale.US, "%.1f A", ec.peakStatorAmps()))
+            .append("</td>\n")
+            .append("          <td>")
+            .append(String.format(Locale.US, "%.2f V", ec.minBatteryVoltage()))
+            .append("</td>\n")
+            .append("          <td>")
+            .append(ec.keepOutInterlockTriggered() ? "TRIGGERED" : "CLEAR")
+            .append("</td>\n")
+            .append("          <td><span class=\"pill ")
+            .append(pill)
+            .append("\">")
+            .append(esc(ec.status()))
+            .append("</span></td>\n")
+            .append("        </tr>\n");
+      }
+      sb.append("      </tbody>\n    </table>\n  </div>\n");
+    }
 
     // Shot-by-Shot Table
     sb.append("  <div class=\"card\">\n")
         .append("    <h2><span>Detected Shot / Feed Events (")
         .append(r.shots().size())
-        .append(")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">Triggered when Feeder + Shooter Flywheels are active simultaneously</span></h2>\n")
+        .append(
+            ")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">Triggered when Feeder + Shooter Flywheels are active simultaneously</span></h2>\n")
         .append("    <table>\n")
-        .append("      <thead><tr><th>Shot #</th><th>Time (s)</th><th>Duration</th><th>Shooter Left (RPS)</th><th>Shooter Right (RPS)</th><th>L/R Δ (RPS)</th><th>Hood Pos (rot)</th><th>Feeder Peak (A)</th><th>Min Battery (V)</th><th>Status</th><th>Video</th></tr></thead>\n")
+        .append(
+            "      <thead><tr><th>Shot #</th><th>Time (s)</th><th>Duration</th><th>Shooter Left (RPS)</th><th>Shooter Right (RPS)</th><th>L/R Δ (RPS)</th><th>Hood Pos (rot)</th><th>Feeder Peak (A)</th><th>Min Battery (V)</th><th>Status</th><th>Video</th></tr></thead>\n")
         .append("      <tbody>\n");
     for (ShotEvent s : r.shots()) {
       String pill = "NOMINAL".equals(s.status()) ? "pill-pass" : "pill-warn";
       sb.append("        <tr>\n")
-          .append("          <td><strong>#").append(s.shotNumber()).append("</strong></td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.1fs", s.timestampSec())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.2fs", s.durationSec())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.1f", s.shooterLeftRps())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.1f", s.shooterRightRps())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.1f", s.shooterAsymmetryRps())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.2f", s.hoodPositionRot())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.1f A", s.feederPeakStatorAmps())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.2f V", s.minBatteryVoltageDuringShot())).append("</td>\n")
-          .append("          <td><span class=\"pill ").append(pill).append("\">").append(esc(s.status())).append("</span></td>\n")
+          .append("          <td><strong>#")
+          .append(s.shotNumber())
+          .append("</strong></td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.1fs", s.timestampSec()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.2fs", s.durationSec()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.1f", s.shooterLeftRps()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.1f", s.shooterRightRps()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.1f", s.shooterAsymmetryRps()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.2f", s.hoodPositionRot()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.1f A", s.feederPeakStatorAmps()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.2f V", s.minBatteryVoltageDuringShot()))
+          .append("</td>\n")
+          .append("          <td><span class=\"pill ")
+          .append(pill)
+          .append("\">")
+          .append(esc(s.status()))
+          .append("</span></td>\n")
           .append("          <td>")
           .append(
               s.videoLink() != null && !s.videoLink().isEmpty()
-                  ? "<a class=\"btn-link\" target=\"_blank\" href=\"" + esc(s.videoLink()) + "\">▶ Clip</a>"
+                  ? "<a class=\"btn-link\" target=\"_blank\" href=\""
+                      + esc(s.videoLink())
+                      + "\">▶ Clip</a>"
                   : "—")
           .append("</td>\n")
           .append("        </tr>\n");
     }
     sb.append("      </tbody>\n    </table>\n  </div>\n");
+
+    // Event-Triggered Camera Snapshots Card (when present)
+    if (r.cameraSnapshots() != null && !r.cameraSnapshots().isEmpty()) {
+      sb.append("  <div class=\"card\">\n")
+          .append("    <h2><span>Event-Triggered Camera Snapshots (")
+          .append(r.cameraSnapshots().size())
+          .append(
+              ")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">On-robot cam-snapshots/*.jpg correlated to match timeline</span></h2>\n")
+          .append("    <table>\n")
+          .append(
+              "      <thead><tr><th>Timestamp</th><th>Camera</th><th>Trigger Reason</th><th>File</th><th>Preview</th></tr></thead>\n")
+          .append("      <tbody>\n");
+      for (CameraSnapshotRef snap : r.cameraSnapshots()) {
+        sb.append("        <tr>\n")
+            .append("          <td><strong>")
+            .append(String.format(Locale.US, "%.2fs", snap.timestampSec()))
+            .append("</strong></td>\n")
+            .append("          <td>")
+            .append(esc(snap.cameraName()))
+            .append("</td>\n")
+            .append("          <td><span class=\"pill pill-pass\">")
+            .append(esc(snap.triggerReason()))
+            .append("</span></td>\n")
+            .append("          <td><code>")
+            .append(esc(snap.fileName()))
+            .append("</code></td>\n")
+            .append("          <td><a class=\"btn-link\" target=\"_blank\" href=\"")
+            .append(esc(snap.relativePath()))
+            .append("\">View Frame</a></td>\n")
+            .append("        </tr>\n");
+      }
+      sb.append("      </tbody>\n    </table>\n  </div>\n");
+    }
 
     // Offline SystemCore / Controller Watch Metrics & Actionable Decisions Card
     if (r.systemHealth() != null) {
@@ -303,7 +527,7 @@ public final class HtmlReportGenerator {
           .append("</span></h2>\n");
       if (sh.watchDecisions().isEmpty()) {
         sb.append(
-            "    <div style=\"font-size:13px;color:#166534;font-weight:600;\">All 14 offline SystemCore / Controller watch metrics are within nominal thresholds (0 warnings).</div>\n");
+            "    <div style=\"font-size:13px;color:#166534;font-weight:600;\">All offline SystemCore / Controller watch metrics are within nominal thresholds (0 warnings).</div>\n");
       } else {
         sb.append("    <table>\n")
             .append(
@@ -356,7 +580,12 @@ public final class HtmlReportGenerator {
     }
     sb.append("\n];\nconst shots = [");
     for (int i = 0; i < r.shots().size(); i++) {
-      sb.append(String.format(Locale.US, "%.2f%s", r.shots().get(i).timestampSec(), (i + 1 < r.shots().size()) ? "," : ""));
+      sb.append(
+          String.format(
+              Locale.US,
+              "%.2f%s",
+              r.shots().get(i).timestampSec(),
+              (i + 1 < r.shots().size()) ? "," : ""));
     }
     sb.append("];\n")
         .append("(function(){\n")
@@ -375,19 +604,24 @@ public final class HtmlReportGenerator {
         .append("  ctx.setLineDash([]);\n")
         .append("  // Draw Total Drive Stator Amps (Blue)\n")
         .append("  ctx.strokeStyle = '#2B7BFF'; ctx.lineWidth = 1.5; ctx.beginPath();\n")
-        .append("  timeline.forEach((p, i) => { const x = xOf(p[0]), y = yAmps(p[2]); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });\n")
+        .append(
+            "  timeline.forEach((p, i) => { const x = xOf(p[0]), y = yAmps(p[2]); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });\n")
         .append("  ctx.stroke();\n")
         .append("  // Draw Battery Voltage (Green)\n")
         .append("  ctx.strokeStyle = '#22C55E'; ctx.lineWidth = 2; ctx.beginPath();\n")
-        .append("  timeline.forEach((p, i) => { const x = xOf(p[0]), y = yVolt(p[1]); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });\n")
+        .append(
+            "  timeline.forEach((p, i) => { const x = xOf(p[0]), y = yVolt(p[1]); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });\n")
         .append("  ctx.stroke();\n")
         .append("  // Draw Shot Markers (Gold)\n")
         .append("  ctx.fillStyle = '#F59E0B';\n")
-        .append("  shots.forEach(t => { const x = xOf(t); ctx.beginPath(); ctx.arc(x, padT + 8, 4, 0, Math.PI*2); ctx.fill(); });\n")
+        .append(
+            "  shots.forEach(t => { const x = xOf(t); ctx.beginPath(); ctx.arc(x, padT + 8, 4, 0, Math.PI*2); ctx.fill(); });\n")
         .append("  // Axes labels\n")
         .append("  ctx.fillStyle = '#A1A1AA'; ctx.font = '11px sans-serif';\n")
-        .append("  ctx.fillText('14V', 12, yVolt(14)+4); ctx.fillText('10V', 12, yVolt(10)+4); ctx.fillText('6.8V', 8, yVolt(6.8)+4);\n")
-        .append("  ctx.fillText('600A', W-42, yAmps(600)+4); ctx.fillText('300A', W-42, yAmps(300)+4); ctx.fillText('0A', W-42, yAmps(0)+4);\n")
+        .append(
+            "  ctx.fillText('14V', 12, yVolt(14)+4); ctx.fillText('10V', 12, yVolt(10)+4); ctx.fillText('6.8V', 8, yVolt(6.8)+4);\n")
+        .append(
+            "  ctx.fillText('600A', W-42, yAmps(600)+4); ctx.fillText('300A', W-42, yAmps(300)+4); ctx.fillText('0A', W-42, yAmps(0)+4);\n")
         .append("})();\n</script>\n</body>\n</html>\n");
 
     Files.writeString(outputHtml, sb.toString(), StandardCharsets.UTF_8);
@@ -458,12 +692,17 @@ public final class HtmlReportGenerator {
         .append(
             "  <link href=\"https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap\" rel=\"stylesheet\">\n")
         .append("  <style>\n")
-        .append("    body { font-family: 'Space Grotesk', system-ui, sans-serif; background: #F2F3F5; color: #212020; padding: 24px; }\n")
-        .append("    .container { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }\n")
-        .append("    .header { background: #FFF; border-top: 6px solid #254BA0; border-radius: 10px; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n")
+        .append(
+            "    body { font-family: 'Space Grotesk', system-ui, sans-serif; background: #F2F3F5; color: #212020; padding: 24px; }\n")
+        .append(
+            "    .container { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }\n")
+        .append(
+            "    .header { background: #FFF; border-top: 6px solid #254BA0; border-radius: 10px; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n")
         .append("    .logo { height: 50px; }\n")
-        .append("    .card { background: #FFF; border-radius: 10px; padding: 18px 22px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }\n")
-        .append("    h2 { font-size: 17px; margin-bottom: 12px; border-bottom: 2px solid #E4E7EC; padding-bottom: 6px; }\n")
+        .append(
+            "    .card { background: #FFF; border-radius: 10px; padding: 18px 22px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }\n")
+        .append(
+            "    h2 { font-size: 17px; margin-bottom: 12px; border-bottom: 2px solid #E4E7EC; padding-bottom: 6px; }\n")
         .append("    table { width: 100%; border-collapse: collapse; font-size: 13px; }\n")
         .append("    th { background: #212020; color: #FFF; text-align: left; padding: 9px 12px; }\n")
         .append("    td { padding: 8px 12px; border-bottom: 1px solid #E4E7EC; }\n")
@@ -472,18 +711,26 @@ public final class HtmlReportGenerator {
         .append("    .pill-pass { background: #DCFCE7; color: #166534; }\n")
         .append("    .pill-warn { background: #FEF3C7; color: #92400E; }\n")
         .append("    .pill-fail { background: #FEE2E2; color: #991B1B; }\n")
-        .append("    a.btn { background: #254BA0; color: #FFF; text-decoration: none; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }\n")
+        .append(
+            "    a.btn { background: #254BA0; color: #FFF; text-decoration: none; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }\n")
         .append("  </style>\n</head>\n<body>\n<div class=\"container\">\n")
         .append("  <div class=\"header\">\n")
         .append("    <div style=\"display:flex;align-items:center;gap:16px;\">\n")
-        .append("      <img class=\"logo\" src=\"").append(LOGO_URL).append("\" alt=\"FLUX Robotics\">\n")
-        .append("      <div><h1 style=\"font-size:21px;\">FRC Team 10413 (FLUX Robotics) — FluxProcessor Index</h1>\n")
-        .append("      <div style=\"font-size:12px;color:#5A606E;\">Automated Match &amp; Practice Audit • Battery Internal Resistance Leaderboard • Swerve Symmetry</div></div>\n")
+        .append("      <img class=\"logo\" src=\"")
+        .append(LOGO_URL)
+        .append("\" alt=\"FLUX Robotics\">\n")
+        .append(
+            "      <div><h1 style=\"font-size:21px;\">FRC Team 10413 (FLUX Robotics) — FluxProcessor Index</h1>\n")
+        .append(
+            "      <div style=\"font-size:12px;color:#5A606E;\">Automated Match &amp; Practice Audit • Battery Internal Resistance Leaderboard • Swerve Symmetry</div></div>\n")
         .append("    </div>\n  </div>\n")
         .append("  <div class=\"card\">\n")
-        .append("    <h2>Analyzed Matches &amp; Practice Sessions (").append(reports.size()).append(")</h2>\n")
+        .append("    <h2>Analyzed Matches &amp; Practice Sessions (")
+        .append(reports.size())
+        .append(")</h2>\n")
         .append("    <table>\n")
-        .append("      <thead><tr><th>Run / Match</th><th>Alliance</th><th>Battery</th><th>Est. R_int</th><th>Min Volt</th><th>Peak Drive Stator</th><th>Dropouts</th><th>Distance</th><th>Shots</th><th>Verdict</th><th>Report</th></tr></thead>\n")
+        .append(
+            "      <thead><tr><th>Run / Match</th><th>Alliance</th><th>Battery</th><th>Est. R_int</th><th>Min Volt</th><th>Peak Drive Stator</th><th>Dropouts</th><th>Distance</th><th>Shots</th><th>Verdict</th><th>Report</th></tr></thead>\n")
         .append("      <tbody>\n");
 
     for (RunAnalysisReport r : reports) {
@@ -493,17 +740,41 @@ public final class HtmlReportGenerator {
               ? "pill-fail"
               : ("WARN".equals(r.overallVerdict()) ? "pill-warn" : "pill-pass");
       html.append("        <tr>\n")
-          .append("          <td><strong>").append(esc(r.runId())).append("</strong></td>\n")
-          .append("          <td>").append(esc(r.allianceStation())).append("</td>\n")
-          .append("          <td>").append(esc(b.batteryName())).append("</td>\n")
-          .append("          <td><strong>").append(String.format(Locale.US, "%.1f mΩ", b.estimatedRintMilliOhms())).append("</strong></td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.2f V", b.minVoltage())).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.0f A", b.peakDriveStatorAmps())).append("</td>\n")
-          .append("          <td>").append(b.enableDropouts()).append("</td>\n")
-          .append("          <td>").append(String.format(Locale.US, "%.1f m", r.totalDistanceMeters())).append("</td>\n")
-          .append("          <td>").append(r.shots().size()).append("</td>\n")
-          .append("          <td><span class=\"pill ").append(pill).append("\">").append(esc(r.overallVerdict())).append("</span></td>\n")
-          .append("          <td><a class=\"btn\" href=\"").append(esc(r.runId())).append("/report.html\">Open Report</a></td>\n")
+          .append("          <td><strong>")
+          .append(esc(r.runId()))
+          .append("</strong></td>\n")
+          .append("          <td>")
+          .append(esc(r.allianceStation()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(esc(b.batteryName()))
+          .append("</td>\n")
+          .append("          <td><strong>")
+          .append(String.format(Locale.US, "%.1f mΩ", b.estimatedRintMilliOhms()))
+          .append("</strong></td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.2f V", b.minVoltage()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.0f A", b.peakDriveStatorAmps()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(b.enableDropouts())
+          .append("</td>\n")
+          .append("          <td>")
+          .append(String.format(Locale.US, "%.1f m", r.totalDistanceMeters()))
+          .append("</td>\n")
+          .append("          <td>")
+          .append(r.shots().size())
+          .append("</td>\n")
+          .append("          <td><span class=\"pill ")
+          .append(pill)
+          .append("\">")
+          .append(esc(r.overallVerdict()))
+          .append("</span></td>\n")
+          .append("          <td><a class=\"btn\" href=\"")
+          .append(esc(r.runId()))
+          .append("/report.html\">Open Report</a></td>\n")
           .append("        </tr>\n");
     }
     html.append("      </tbody>\n    </table>\n  </div>\n</div>\n</body>\n</html>\n");

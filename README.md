@@ -1,36 +1,46 @@
-# FluxProcessor — FRC Team 10413 (FLUX Robotics)
+# FluxProcessor v2.0 — FRC Team 10413 (FLUX Robotics)
 
-Automated post-match and post-practice log, multi-headset voice (`Driver` / `Operator` / `Coach`), and video (`YouTube` / local `.mp4`) analyzer for **FRC Team 10413 (FLUX Robotics)**.
+Automated post-match and post-practice `.wpilog`/`.hoot`, multi-headset voice (`Driver` / `Operator` / `Coach`), on-robot camera snapshot (`cam-snapshots/*.jpg`), match video (`YouTube` / local `.mp4`), Digital-Twin simulation auto-calibration (`--calibrate-sim`), and JSON-RPC 2.0 Model Context Protocol (`--mcp`) analyzer for **FRC Team 10413 (FLUX Robotics)**.
 
-Works **out of the box with zero modifications to existing robot code** (`New_Robot/`).
+Built on **Java 25** (`--release 25`) with bundled **`FluxFig`** (`libs/fluxfig-1.0.0.jar`) and zero external Maven runtime dependencies. Works **out of the box with zero modifications to existing robot code** (`New_Robot/`, `Flux-SystemCore-2027/`, `Flux-RoboRIO-2027/`).
 
 ---
 
-## Features (v0.1)
+## Features (v2.0)
 
-1. **Zero-Dependency Pure-Java `.wpilog` Binary Parser & Multi-Bus Merger (`merged.wpilog`)**
-   - Reads RoboRIO (`_rio.wpilog`), Drivetrain CANivore (`_drive.wpilog`), and Mechanism CANivore (`_mech.wpilog`) logs (and automatically converts raw CTRE Phoenix 6 `.hoot` files via `owlet` when present).
+1. **`FluxFig` Snapshot Hydration & Zero-Dependency `.wpilog` Multi-Bus Merger (`merged.wpilog`)**
+   - Automatically hydrates `RobotProfile` (`COMP_2027`, `PRACTICE_2027`, `FUEL`, `CORAL`) and all mechanism CAN IDs, current limits, and gravity models directly from `/FluxFig/EffectiveSnapshot` inside `.wpilog` files or from a `FluxFig` CSV directory (`--config-dir <dir>`).
+   - Reads RoboRIO (`_rio.wpilog`), Drivetrain CANivore (`_drive.wpilog`), and Mechanism CANivore (`_mech.wpilog`) logs (and converts raw CTRE Phoenix 6 `.hoot` files via `owlet` when present).
    - Writes a unified `merged.wpilog` combining `/Rio/*`, `/DriveBus/*`, `/MechBus/*`, `/VoiceNotes/*`, and `/FluxAudit/*` so you open **1 single file** in AdvantageScope.
 
-2. **Named Battery Internal Resistance ($R_{\text{int}}$) & Brownout Audit**
-   - Estimates battery internal resistance ($R_{\text{int}} = -\Delta V / \Delta I$ in $\text{m}\Omega$) under acceleration load, tracks minimum battery voltage, brownout duration ($< 7.0\text{ V}$ warning, $< 6.8\text{ V}$ critical), and mid-match enable dropouts, and updates `batteries-health.csv`.
+2. **Named Battery Internal Resistance ($R_{\text{int}}$) & Brownout Audit (`BatteryAnalyzer`)**
+   - Estimates battery internal resistance ($R_{\text{int}} = -\Delta V / \Delta I$ in $\text{m}\Omega$) under acceleration load, tracks minimum battery voltage across both `Pigeon2/SupplyVoltage` and `TalonFX/SupplyVoltage` ($\pm 100\text{ ms}$ windowed min/max buckets), brownout duration ($< 7.0\text{ V}$ warning, $< 6.8\text{ V}$ critical), and mid-match enable dropouts, and updates `batteries-health.csv`.
 
-3. **4-Corner Swerve Symmetry & Mechanism Health Check**
-   - Compares Front-Left (`FL`), Front-Right (`FR`), Back-Left (`BL`), and Back-Right (`BR`) drive and steer motor currents and velocities against the 4-corner median to catch rubbing brakes, worn bearings, or current-limit mismatches early.
-   - Audits all mechanisms (`Intake`, `Feeder`, `Indexer`, `Shooter Left/Right`, `Hood`, `Tilter`) and detects every discrete **Shot / Feed Event**.
+3. **4-Corner Swerve Symmetry, 2027 Elevator Cycles & $5\text{ m} \times 3\text{ m}$ `ShopStressSuiteCmd` Pass Gates**
+   - **`SwerveSymmetryAnalyzer`:** Compares Front-Left (`FL`), Front-Right (`FR`), Back-Left (`BL`), and Back-Right (`BR`) drive and steer motor currents and velocities against the 4-corner median.
+   - **`ShopStressAndElevatorAnalyzer`:**
+     - Evaluates 2027 **Elevator + Arm (`L1..L4`)** scoring cycles and 2D keep-out interlocks alongside 2026 flywheel/feeder shot detection.
+     - Audits the **$5\text{ m} \times 3\text{ m}$ `ShopStressSuiteCmd` & `VirtualGeofence`** pass gates (`0` wall breaches, Figure-8 loop closure drift $\le 4.0\text{ cm}$, camera-to-camera handoff pose step $\le 3.0\text{ cm}$, and 90-Degree Box-Step 4-corner current spread $\le 12.0\%$).
+     - Correlates event-triggered on-robot camera snapshots (`cam-snapshots/*.jpg`) captured on pre-match lock, pose jumps, shots, and voice notes.
 
-4. **Multi-Headset Voice Feedback (6-Second Lookback) & Video Jump-Links**
-   - Correlates spoken comments from `Driver`, `Operator`, and `Coach` tracks (`voice-notes.txt`, `audio-driver.txt`, `audio-operator.txt`, `audio-coach.txt`) with the preceding 6-second sensor window ($[t - 6.0\text{s} .. t]$) and links every event to a timestamped YouTube or local `.mp4` video clip.
+4. **Digital-Twin Simulation Auto-Calibrator (`--calibrate-sim [<fluxfig-csv-dir>]`)**
+   - Extracts measured battery $R_{\text{int}}$ (`mOhm`), effective swerve wheel radius (`wheelRadiusMeters`), steer-to-drive coupling ratio (`swerveCouplingRatio`), and mechanism feedforward constants $(k_S, k_V, k_A, k_G)$ via OLS regression (`DigitalTwinCalibrator`).
+   - Atomically validates (`FluxFig.validateStrict()`) and writes calibrated constants back into `batteries.csv`, `parameters.csv`, and `mechanisms.csv`, plus outputs `sim-calibration.json`.
 
-5. **1-Page Browser Report (`report.html`) & Season Leaderboard (`runs-index.html`)**
-   - Styled in official **Pelham FLUX Robotics (`pelhamroboticsteam.org`)** brand colors (`#212020` Charcoal Black, `#254BA0` Pelham Royal Blue, `#2B7BFF` FLUX Electric Blue, `Space Grotesk` font).
+5. **Multimodal Model Context Protocol (`--mcp`) Server (`FluxMcpServer`)**
+   - Built-in JSON-RPC 2.0 stdio MCP server exposing 8 multimodal tools for coding agents (Claude Code, Gemini, Cursor):
+     - `list_entries`, `find_condition`, `time_correlate`, `compare_runs`, `moi_regression`, `search_voice_notes`, `get_camera_snapshots`, and `get_video_frames`.
+
+6. **Multi-Headset Voice Feedback (6-Second Lookback), Video Jump-Links & 14-Metric SystemCore Watch Audit**
+   - Supports both `run-meta.json` (written by `FluxTray.jar`) and `*.meta.json`, accepting `"batteryName"` or `"namedBattery"` (including names with spaces) and embedded `"voiceNotes": [...]` JSON arrays in addition to `voice-notes.txt`.
+   - Evaluates all **14 Offline SystemCore & Controller Watch Metrics** from `system-snapshot.txt` (without fabricating synthetic SystemCore CPU/eMMC metrics on `.wpilog`-only roboRIO runs).
 
 ---
 
 ## Quick Start
 
 ### Windows (Double-Click, Drag-and-Drop, or PowerShell)
-No external install is needed if **WPILib** (`C:\Users\Public\wpilib\2026\jdk` or `2027\jdk`) or **Java 17+** is on the laptop, and a ready-to-run [`dist/flux-processor.jar`](dist/flux-processor.jar) is included in the repository:
+No external install is needed if **WPILib 2027** (`C:\Users\Public\wpilib\2027\jdk`) or **Java 25** is on the laptop, and a ready-to-run fat-jar [`dist/flux-processor.jar`](dist/flux-processor.jar) (bundling `FluxFig`) is included in the repository:
 1. **Double-Click [`run.bat`](run.bat):** Opens a native Windows folder-picker dialog, analyzes the selected match-logs folder, and automatically opens `runs-index.html` in your browser.
 2. **Drag-and-Drop onto [`run.bat`](run.bat):** Drag any match-logs folder **or** any `match-logs_*.zip` file produced by `pull-logs.bat` directly onto `run.bat` in Windows Explorer.
 3. **PowerShell / Command Prompt:**
@@ -45,9 +55,22 @@ No external install is needed if **WPILib** (`C:\Users\Public\wpilib\2026\jdk` o
 java -jar dist/flux-processor.jar <path/to/match-logs> --out ./output
 ```
 
-### Custom Robot Profile (`--profile` or `--robot`) for Any FRC Team
+### Digital-Twin Sim Auto-Calibration (`--calibrate-sim`)
+```bash
+java -jar dist/flux-processor.jar <path/to/run-logs> --calibrate-sim ../Flux-SystemCore-2027/src/main/deploy/configs
+```
+
+### Multimodal MCP Server (`--mcp`)
+```bash
+java -jar dist/flux-processor.jar --mcp <path/to/match-logs>
+```
+
+---
+
+## Custom Robot Profile (`--config-dir`, `--profile`, or `--robot`) for Any FRC Team
 `FluxProcessor` works out of the box with **CTRE Phoenix 6** (`.hoot` / `.wpilog`), **AdvantageKit** (`/Drive/Module0..3/*`, `double[]` `/Drive/DriveCurrentAmps`), **WPILib `DataLogManager` / DogLog / Epilogue**, and **REV URCL** logs.
-- **Zero-Config Auto-Discovery (`--robot AUTO`, default):** Automatically detects Team 10413 `FUEL` / `CORAL` presets or scans the `.wpilog` entry table to discover any other FRC team's swerve modules, mechanisms, battery voltage, and enable signals.
+- **Zero-Config Auto-Discovery (`--robot AUTO`, default):** Automatically hydrates from `/FluxFig/EffectiveSnapshot` in the `.wpilog`, detects Team 10413 `COMP_2027` / `FUEL` / `CORAL` presets, or scans the `.wpilog` entry table to discover any other FRC team's swerve modules, mechanisms, battery voltage, and enable signals.
+- **`FluxFig` CSV Directory (`--config-dir <path/to/configs>`):** Loads `parameters.csv` and `mechanisms.csv` directly via `FluxFig`.
 - **External JSON Profile (`--profile robot-profile.json` or placed in the log folder):** Any team can define custom CAN IDs, gear ratios, or custom topic paths without recompiling Java:
 ```json
 {
@@ -71,24 +94,21 @@ java -jar dist/flux-processor.jar <path/to/match-logs> --out ./output
 
 ---
 
-## Optional Run Metadata (`run.meta.json`) — Voice Notes, Video Sync & Named Battery
+## Optional Run Metadata (`run-meta.json` / `*.meta.json`) — Voice Notes, Video Sync & Named Battery
 
-Drop a `run.meta.json` (or `*.meta.json`) into any run folder (written automatically by `FluxTray.jar` during practice or competition) to correlate multi-headset voice notes (`Driver`, `Operator`, `Coach`), YouTube/stand video jump links (`[▶ Watch @ m:ss]`), and named battery health (`batteries-health.csv`):
+Drop a `run-meta.json` (written automatically by `FluxTray.jar` during practice or competition) or `*.meta.json` into any run folder to correlate multi-headset voice notes (`Driver`, `Operator`, `Coach`), YouTube/stand video jump links (`[▶ Watch @ m:ss]`), and named battery health (`batteries-health.csv`):
 
 ```json
 {
-  "namedBattery": "BAT-03-COMP",
+  "batteryName": "2027-B03 (Comp Pack)",
   "gitSha": "251dc78",
-  "configSha": "a84f92c1",
+  "configSha256": "a84f92c1",
   "videoUrl": "https://www.youtube.com/watch?v=...",
   "videoOffsetSec": 14.0,
   "voiceNotes": [
     { "role": "Driver",   "timeSec": 26.5,  "text": "Hard acceleration out of source, felt a brief stutter" },
-    { "role": "Operator", "timeSec": 82.0,  "text": "Shot felt slightly short from mid-wing" },
+    { "role": "Operator", "timeSec": 82.0,  "text": "Elevator L4 cycle felt super fast" },
     { "role": "Driver",   "timeSec": 145.0, "text": "Robot keeps browning out and stuttering in endgame!" }
   ]
 }
 ```
-
-- **Competition "Capture on Field, Sync in Pit" Mode:** Because FMS blocks SFTP (Port 22) on the field and requires unplugging immediately on the green light, `FluxTray.jar` records `driver-audio.ogg` + `.dslog` + `run.meta.json` locally on the Driver Station laptop at the field and joins the robot's `.wpilog`/`.hoot` files later in the pit.
-- **CTRE `.hoot` Conversion Resilience (`HootConverter`):** Uses `owlet <hoot> -S -F` (full-file signal scan) with essential signal filtering (`-s`) and omits `-e` (`--enable-only`) so pre-match pit/queue enables never truncate the actual competition match at the end of the `.hoot` file; also accepts `owlet` output at 100% completion even when `owlet` exits with code `1` due to power-off truncation of the final CAN frame.

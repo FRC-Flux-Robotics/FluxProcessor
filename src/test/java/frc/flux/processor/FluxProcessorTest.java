@@ -1,20 +1,37 @@
 package frc.flux.processor;
 
+import frc.flux.processor.analysis.DigitalTwinCalibrator;
 import frc.flux.processor.analysis.RunAnalyzer;
+import frc.flux.processor.mcp.FluxMcpServer;
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.report.HtmlReportGenerator;
 import frc.flux.processor.wpilog.WpiLogReader;
 import frc.flux.processor.wpilog.WpiLogWriter;
+import frc.lib.fluxfig.FluxFig;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Self-contained verification tests for {@code FluxProcessor} (binary {@code .wpilog} read/write,
- * battery internal resistance regression, 4-corner swerve symmetry, shot detection, 6-second
- * multi-headset voice lookback, video jump links, and HTML/CSV report generation).
+ * Self-contained verification tests for {@code FluxProcessor} v2.0:
+ *
+ * <ul>
+ *   <li>Binary {@code .wpilog} read/write round-trip
+ *   <li>Battery internal resistance regression, 4-corner swerve symmetry, shot detection, 6-second
+ *       multi-headset voice lookback, and video jump links
+ *   <li>Multi-team AdvantageKit &amp; {@code double[]} array auto-discovery
+ *   <li>Custom {@code robot-profile.json} &amp; custom Phoenix 6 CAN IDs
+ *   <li>Offline SystemCore 14-metric {@code system-snapshot.txt} watch audit
+ *   <li>{@code FluxFig} {@code /FluxFig/EffectiveSnapshot} hydration &amp; {@code FluxTray} {@code
+ *       run-meta.json} contract ({@code batteryName} with spaces + JSON {@code voiceNotes} array)
+ *   <li>5m x 3m {@code ShopStressSuiteCmd} pass gates, 2027 Elevator {@code L1..L4} cycles, {@code
+ *       cam-snapshots/*.jpg}, and {@code .wpilog}-only watch metric guard
+ *   <li>Digital-Twin Sim Auto-Calibration ({@code --calibrate-sim}) CSV write-back via {@code
+ *       FluxFig}
+ *   <li>JSON-RPC 2.0 {@code --mcp} Multimodal Server across all 8 tools
+ * </ul>
  */
 public final class FluxProcessorTest {
 
@@ -24,7 +41,11 @@ public final class FluxProcessorTest {
     testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery();
     testOtherTeamCustomJsonProfileAndCustomPhoenix6Ids();
     testOfflineSystemCoreWatchMetricsAndReportCard();
-    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (5/5)");
+    testFluxFigSnapshotAndFluxTrayRunMetaContract();
+    testShopStressGateElevatorCyclesAndWpilogOnlyWatchGuard();
+    testDigitalTwinCalibratorCsvWriteBack();
+    testMcpServerMultimodalTools();
+    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (9/9)");
   }
 
   public static void testWpiLogReadWriteRoundTrip() throws Exception {
@@ -131,8 +152,11 @@ public final class FluxProcessorTest {
         RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.FUEL, true);
 
     assertTrue("Thor".equals(report.namedBattery()), "Expected Named Battery Thor");
-    assertTrue("CRITICAL".equals(report.overallVerdict()), "Expected CRITICAL verdict due to 6.65V sag");
-    assertTrue(report.shots().size() == 1, "Expected 1 detected shot, got " + report.shots().size());
+    assertTrue(
+        "CRITICAL".equals(report.overallVerdict()),
+        "Expected CRITICAL verdict due to 6.65V sag");
+    assertTrue(
+        report.shots().size() == 1, "Expected 1 detected shot, got " + report.shots().size());
     assertTrue(
         report.voiceCorrelations().size() == 2,
         "Expected 2 correlated voice notes, got " + report.voiceCorrelations().size());
@@ -142,27 +166,34 @@ public final class FluxProcessorTest {
     assertTrue(
         report.voiceCorrelations().get(1).videoLink().contains("youtu.be/dQw4w9WgXcQ?t="),
         "Expected YouTube jump link on voice correlation");
-    assertTrue(Files.exists(runDir.resolve("merged.wpilog")), "Expected merged.wpilog to be written");
+    assertTrue(
+        Files.exists(runDir.resolve("merged.wpilog")), "Expected merged.wpilog to be written");
 
     Path reportHtml = runDir.resolve("report.html");
     HtmlReportGenerator.writeRunReport(report, reportHtml);
     HtmlReportGenerator.writeBatchSummary(List.of(report), runDir);
     assertTrue(Files.exists(reportHtml), "Expected report.html to be generated");
     assertTrue(Files.exists(runDir.resolve("runs-index.html")), "Expected runs-index.html");
-    assertTrue(Files.exists(runDir.resolve("batteries-health.csv")), "Expected batteries-health.csv");
+    assertTrue(
+        Files.exists(runDir.resolve("batteries-health.csv")), "Expected batteries-health.csv");
   }
 
   public static void testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery() throws Exception {
     Path runDir = Files.createTempDirectory("other-team-akit-test");
-    try (WpiLogWriter akit = new WpiLogWriter(runDir.resolve("akit_match.wpilog"), "AdvantageKit")) {
+    try (WpiLogWriter akit =
+        new WpiLogWriter(runDir.resolve("akit_match.wpilog"), "AdvantageKit")) {
       int eRobot = akit.startEntry("/AdvantageKit/Robot", "string", "", 0L);
       int eEnable = akit.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
       int eVolt = akit.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
       int eDriveAmpsArr = akit.startEntry("/Drive/DriveCurrentAmps", "double[]", "", 0L);
-      int eMod0Vel = akit.startEntry("/Drive/Module0/DriveVelocityMetersPerSec", "double", "", 0L);
-      int eMod1Vel = akit.startEntry("/Drive/Module1/DriveVelocityMetersPerSec", "double", "", 0L);
-      int eMod2Vel = akit.startEntry("/Drive/Module2/DriveVelocityMetersPerSec", "double", "", 0L);
-      int eMod3Vel = akit.startEntry("/Drive/Module3/DriveVelocityMetersPerSec", "double", "", 0L);
+      int eMod0Vel =
+          akit.startEntry("/Drive/Module0/DriveVelocityMetersPerSec", "double", "", 0L);
+      int eMod1Vel =
+          akit.startEntry("/Drive/Module1/DriveVelocityMetersPerSec", "double", "", 0L);
+      int eMod2Vel =
+          akit.startEntry("/Drive/Module2/DriveVelocityMetersPerSec", "double", "", 0L);
+      int eMod3Vel =
+          akit.startEntry("/Drive/Module3/DriveVelocityMetersPerSec", "double", "", 0L);
       int eFlywheelVel = akit.startEntry("/Flywheel/VelocityRps", "double", "", 0L);
       int eFlywheelAmps = akit.startEntry("/Flywheel/CurrentAmps", "double", "", 0L);
       int eFeederAmps = akit.startEntry("/Feeder/CurrentAmps", "double", "", 0L);
@@ -200,7 +231,8 @@ public final class FluxProcessorTest {
         "Expected 4 auto-discovered AdvantageKit swerve corners");
     assertTrue(
         Math.abs(report.peakSpeedMps() - 3.8) < 0.1,
-        "Expected 3.8 m/s peak speed from AdvantageKit m/s topics, got " + report.peakSpeedMps());
+        "Expected 3.8 m/s peak speed from AdvantageKit m/s topics, got "
+            + report.peakSpeedMps());
     assertTrue(
         report.shots().size() == 1,
         "Expected 1 detected shot from generic /Flywheel + /Feeder subsystems, got "
@@ -264,10 +296,15 @@ public final class FluxProcessorTest {
     RunAnalysisReport report =
         RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
 
-    assertTrue("KRAKEN_254".equals(report.robotName()), "Expected KRAKEN_254 from robot-profile.json");
+    assertTrue(
+        "KRAKEN_254".equals(report.robotName()),
+        "Expected KRAKEN_254 from robot-profile.json");
     assertTrue(report.swerveCorners().get(0).driveId() == 10, "Expected FL driveId 10");
-    assertTrue(report.mechanisms().size() == 3, "Expected 3 custom mechanisms from JSON profile");
-    assertTrue(report.shots().size() == 1, "Expected 1 shot detected on custom Launcher 51 + Kicker 52");
+    assertTrue(
+        report.mechanisms().size() == 3, "Expected 3 custom mechanisms from JSON profile");
+    assertTrue(
+        report.shots().size() == 1,
+        "Expected 1 shot detected on custom Launcher 51 + Kicker 52");
     assertTrue(
         Math.abs(report.shots().get(0).hoodPositionRot() - 14.5) < 1e-6,
         "Expected Elevator position 14.5 captured during shot");
@@ -327,12 +364,16 @@ public final class FluxProcessorTest {
 
     RunAnalysisReport report =
         RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
-    assertTrue(report.systemHealth() != null, "Expected systemHealth to be populated from system-snapshot.txt");
+    assertTrue(
+        report.systemHealth() != null,
+        "Expected systemHealth to be populated from system-snapshot.txt");
     assertTrue(
         report.systemHealth().watchDecisions().size() >= 14,
         "Expected all 14 offline SystemCore watch decisions to trigger, got "
             + report.systemHealth().watchDecisions().size());
-    assertTrue("CRITICAL".equals(report.overallVerdict()), "Expected CRITICAL verdict from odd CAN port / thermal");
+    assertTrue(
+        "CRITICAL".equals(report.overallVerdict()),
+        "Expected CRITICAL verdict from odd CAN port / thermal");
 
     Path htmlPath = runDir.resolve("report.html");
     HtmlReportGenerator.writeRunReport(report, htmlPath);
@@ -340,6 +381,349 @@ public final class FluxProcessorTest {
     assertTrue(
         html.contains("SystemCore &amp; Controller Offline Watch Audit"),
         "Expected SystemCore watch audit card in report.html");
+  }
+
+  public static void testFluxFigSnapshotAndFluxTrayRunMetaContract() throws Exception {
+    Path cfgDir = createSampleFluxFigDirectory();
+    FluxFig fig = FluxFig.load(cfgDir, "COMP_2027");
+    String snapshot = fig.getEffectiveSnapshot();
+
+    Path runDir = Files.createTempDirectory("fluxfig-snapshot-test");
+    // Write FluxTray's exact run-meta.json format with spaces in batteryName and JSON voiceNotes array
+    Files.writeString(
+        runDir.resolve("run-meta.json"),
+        """
+        {
+          "runId": "run_2027_q1",
+          "batteryName": "2027-B04 (Alpha Pack)",
+          "gitSha": "9f8e7d6",
+          "configSha256": "deadbeef1234",
+          "voiceNotes": [
+            { "role": "DRIVER", "timeSec": 4.2, "text": "Elevator L4 extension felt super smooth" }
+          ]
+        }
+        """,
+        StandardCharsets.UTF_8);
+
+    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("sc_2027.wpilog"), "AdvantageKit")) {
+      int eSnap = log.startEntry("/FluxFig/EffectiveSnapshot", "string", "", 0L);
+      int eActive = log.startEntry("/FluxFig/ActiveProfile", "string", "", 0L);
+      int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+      int eElevPos = log.startEntry("/Mechanisms/Elevator/PositionRot", "double", "", 0L);
+      int eElevAmps = log.startEntry("/Mechanisms/Elevator/LeaderStatorAmps", "double", "", 0L);
+      int eArmPos = log.startEntry("/Mechanisms/Arm/PositionRot", "double", "", 0L);
+      int eArmAmps = log.startEntry("/Mechanisms/Arm/LeaderStatorAmps", "double", "", 0L);
+
+      log.appendString(eSnap, 0L, snapshot);
+      log.appendString(eActive, 0L, "COMP_2027");
+      for (int step = 1; step <= 30; step++) {
+        double tSec = step * 0.2;
+        long tsUs = Math.round(tSec * 1_000_000.0);
+        log.appendBoolean(eEnable, tsUs, true);
+        log.appendDouble(eVolt, tsUs, 12.3);
+        boolean scoring = (tSec >= 2.0 && tSec <= 3.6);
+        log.appendDouble(eElevPos, tsUs, scoring ? 41.0 : 0.5);
+        log.appendDouble(eElevAmps, tsUs, scoring ? 38.0 : 2.0);
+        log.appendDouble(eArmPos, tsUs, scoring ? 0.22 : 0.0);
+        log.appendDouble(eArmAmps, tsUs, scoring ? 14.0 : 1.0);
+      }
+    }
+
+    RunAnalysisReport report =
+        RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+
+    assertTrue(
+        "COMP_2027".equals(report.robotName()),
+        "Expected COMP_2027 hydrated from /FluxFig/EffectiveSnapshot, got " + report.robotName());
+    assertTrue(
+        "2027-B04 (Alpha Pack)".equals(report.namedBattery()),
+        "Expected full batteryName with spaces from run-meta.json, got " + report.namedBattery());
+    assertTrue(
+        report.mechanisms().size() >= 2,
+        "Expected Elevator and Arm mechanisms hydrated from FluxFig snapshot");
+    assertTrue(
+        report.elevatorCycles().size() == 1 && "L4".equals(report.elevatorCycles().get(0).targetLevel()),
+        "Expected 1 L4 ElevatorCycleEvent");
+    assertTrue(
+        !report.voiceCorrelations().isEmpty()
+            && report
+                .voiceCorrelations()
+                .get(0)
+                .transcript()
+                .contains("Elevator L4 extension felt super smooth"),
+        "Expected JSON voiceNotes array from run-meta.json to be parsed and correlated");
+  }
+
+  public static void testShopStressGateElevatorCyclesAndWpilogOnlyWatchGuard() throws Exception {
+    Path runDir = Files.createTempDirectory("shop-stress-gate-test");
+    Path snapDir = runDir.resolve("cam-snapshots");
+    Files.createDirectories(snapDir);
+    Files.writeString(
+        snapDir.resolve("limelightsc0_t2.40s_shot.jpg"), "FAKE_JPEG_BYTES", StandardCharsets.UTF_8);
+
+    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("shop_stress.wpilog"), "ShopStress")) {
+      int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+      int eBreach = log.startEntry("/VirtualGeofence/WallBreachCount", "double", "", 0L);
+      int eDrift = log.startEntry("/ShopStress/Figure8LoopClosureDriftCm", "double", "", 0L);
+      int eHandoff = log.startEntry("/ShopStress/MaxCameraHandoffStepCm", "double", "", 0L);
+      int eSpread = log.startEntry("/ShopStress/BoxStepCornerSpreadPct", "double", "", 0L);
+      int eDriveMs = log.startEntry("/Performance/DriveMs", "double", "", 0L);
+      int eCpuTemp = log.startEntry("/SystemStats/CPUTemp", "double", "", 0L);
+
+      for (int step = 1; step <= 25; step++) {
+        long tsUs = step * 200_000L;
+        log.appendBoolean(eEnable, tsUs, true);
+        log.appendDouble(eVolt, tsUs, 12.2);
+        log.appendDouble(eBreach, tsUs, 0.0);
+        log.appendDouble(eDrift, tsUs, 2.75);
+        log.appendDouble(eHandoff, tsUs, 1.85);
+        log.appendDouble(eSpread, tsUs, 6.4);
+        log.appendDouble(eDriveMs, tsUs, 1.1);
+        log.appendDouble(eCpuTemp, tsUs, 48.0);
+      }
+    }
+
+    RunAnalysisReport report =
+        RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+
+    assertTrue(
+        report.shopStressGate() != null && report.shopStressGate().present(),
+        "Expected ShopStressGateMetrics to be present");
+    assertTrue(
+        "PASS".equals(report.shopStressGate().overallGateStatus()),
+        "Expected ShopStressGateMetrics PASS, got " + report.shopStressGate().overallGateStatus());
+    assertTrue(
+        report.cameraSnapshots().size() == 1
+            && "SHOT_OR_SCORE".equals(report.cameraSnapshots().get(0).triggerReason()),
+        "Expected 1 discovered camera snapshot with trigger SHOT_OR_SCORE");
+    assertTrue(
+        report.systemHealth() != null
+            && report.systemHealth().controllerType().contains("WPILOG-ONLY")
+            && report.systemHealth().totalCpuPct() == 0.0
+            && report.systemHealth().freeStorageMb() == 0.0,
+        "Expected .wpilog-only run without system-snapshot.txt not to fabricate fake SystemCore CPU/storage stats");
+  }
+
+  public static void testDigitalTwinCalibratorCsvWriteBack() throws Exception {
+    Path cfgDir = createSampleFluxFigDirectory();
+    Path runDir = Files.createTempDirectory("sim-cal-run");
+
+    Files.writeString(
+        runDir.resolve("run-meta.json"),
+        """
+        { "batteryName": "2027-B01", "gitSha": "cal123" }
+        """,
+        StandardCharsets.UTF_8);
+
+    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("cal.wpilog"), "Cal")) {
+      int eSnap = log.startEntry("/FluxFig/EffectiveSnapshot", "string", "", 0L);
+      int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+      int eSupply = log.startEntry("Phoenix6/TalonFX-2/SupplyCurrent", "double", "", 0L);
+      int eRot = log.startEntry("/SimCal/WheelRotationsDelta", "double", "", 0L);
+      int eDist = log.startEntry("/SimCal/VisionGroundDistanceMeters", "double", "", 0L);
+      int eCoupling = log.startEntry("/SimCal/MeasuredCouplingRatio", "double", "", 0L);
+      int eElevVolts = log.startEntry("/Mechanisms/Elevator/LeaderAppliedVolts", "double", "", 0L);
+      int eElevVel = log.startEntry("/Mechanisms/Elevator/VelocityRps", "double", "", 0L);
+      int eElevPos = log.startEntry("/Mechanisms/Elevator/PositionRot", "double", "", 0L);
+
+      log.appendString(eSnap, 0L, FluxFig.load(cfgDir, "COMP_2027").getEffectiveSnapshot());
+      log.appendBoolean(eEnable, 0L, false);
+      log.appendDouble(eVolt, 0L, 12.70);
+      log.appendDouble(eSupply, 0L, 1.0);
+
+      for (int step = 1; step <= 40; step++) {
+        double tSec = step * 0.2;
+        long tsUs = Math.round(tSec * 1_000_000.0);
+        log.appendBoolean(eEnable, tsUs, true);
+        double iPerWheel = 20.0 + (step % 10) * 3.0;
+        double iTotal = iPerWheel * 4.0;
+        // True R_int = 19.0 mOhm (0.019 Ohm)
+        log.appendDouble(eVolt, tsUs, 12.70 - iTotal * 0.019);
+        log.appendDouble(eSupply, tsUs, iPerWheel);
+
+        // True Elevator kG = 0.35V, kS = 0.18V, kV = 0.12 V/RPS, kA = 0.01 V/RPS^2
+        double vel = (step <= 5) ? 0.0 : (10.0 + step * 0.8);
+        double accel = (step <= 5) ? 0.0 : 4.0;
+        double appliedV = (step <= 5) ? 0.35 : (0.35 + 0.18 + 0.12 * vel + 0.01 * accel);
+        log.appendDouble(eElevVel, tsUs, vel);
+        log.appendDouble(eElevVolts, tsUs, appliedV);
+        log.appendDouble(eElevPos, tsUs, step * 0.5);
+      }
+      // 10.0 rotations -> 3.129 m => wheel radius = 0.04980 m
+      log.appendDouble(eRot, 8_000_000L, 10.0);
+      log.appendDouble(eDist, 8_000_000L, 2.0 * Math.PI * 10.0 * 0.04980);
+      log.appendDouble(eCoupling, 8_000_000L, 3.4500);
+    }
+
+    RunAnalysisReport report =
+        RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+    DigitalTwinCalibrator.SimCalibrationSummary summary =
+        DigitalTwinCalibrator.calibrateAndWrite(
+            List.of(report), List.of(runDir), cfgDir, runDir, "COMP_2027");
+
+    assertTrue(
+        Math.abs(summary.calibratedWheelRadiusMeters() - 0.04980) < 1e-4,
+        "Expected calibrated wheelRadiusMeters ~0.04980, got "
+            + summary.calibratedWheelRadiusMeters());
+    assertTrue(
+        Math.abs(summary.calibratedCouplingRatio() - 3.4500) < 1e-3,
+        "Expected calibrated swerveCouplingRatio ~3.4500");
+    assertTrue(
+        Files.exists(summary.summaryJsonPath()), "Expected sim-calibration.json to be written");
+
+    // Reload FluxFig from cfgDir and verify CSVs were updated and pass strict validation
+    FluxFig reloaded = FluxFig.load(cfgDir, "COMP_2027");
+    assertTrue(
+        Math.abs(reloaded.getDouble("wheelRadiusMeters") - 0.04980) < 1e-4,
+        "Expected parameters.csv wheelRadiusMeters updated to 0.04980");
+    List<FluxFig.BatterySpec> batts = reloaded.bindTable("batteries", FluxFig.BatterySpec.class);
+    assertTrue(
+        !batts.isEmpty() && Math.abs(batts.get(0).nominalRintMilliOhms() - 19.0) < 2.0,
+        "Expected batteries.csv 2027-B01 nominalRintMilliOhms updated near 19.0 mOhm");
+  }
+
+  public static void testMcpServerMultimodalTools() throws Exception {
+    Path wsDir = Files.createTempDirectory("flux-mcp-test");
+    Path runA = wsDir.resolve("run_A");
+    Path runB = wsDir.resolve("run_B");
+    Files.createDirectories(runA.resolve("cam-snapshots"));
+    Files.createDirectories(runB);
+
+    Files.writeString(
+        runA.resolve("cam-snapshots").resolve("limelightsc1_t3.50s_jump.jpg"),
+        "FAKE_JPG",
+        StandardCharsets.UTF_8);
+    Files.writeString(
+        runA.resolve("run-meta.json"),
+        """
+        {
+          "batteryName": "Thor",
+          "videoUrl": "https://youtu.be/abc123xyz",
+          "videoOffsetSec": 5.0,
+          "voiceNotes": [
+            { "role": "DRIVER", "timeSec": 4.0, "text": "Pose jumped near center truss" }
+          ]
+        }
+        """,
+        StandardCharsets.UTF_8);
+
+    for (Path dir : List.of(runA, runB)) {
+      try (WpiLogWriter w = new WpiLogWriter(dir.resolve("match.wpilog"), "MCP")) {
+        int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+        int eVolt = w.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+        for (int i = 1; i <= 25; i++) {
+          long ts = i * 200_000L;
+          w.appendBoolean(eEnable, ts, true);
+          double v = (dir.equals(runA) && i == 15) ? 6.60 : 12.1;
+          w.appendDouble(eVolt, ts, v);
+        }
+      }
+    }
+
+    FluxMcpServer mcp = new FluxMcpServer(wsDir, RobotProfile.AUTO);
+
+    String initResp = mcp.handleRequest("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}");
+    assertTrue(
+        initResp.contains("\"flux-processor-mcp\""), "Expected MCP serverInfo in initialize");
+
+    String listResp = mcp.handleRequest("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
+    for (String tool :
+        List.of(
+            "list_entries",
+            "find_condition",
+            "time_correlate",
+            "compare_runs",
+            "moi_regression",
+            "search_voice_notes",
+            "get_camera_snapshots",
+            "get_video_frames")) {
+      assertTrue(listResp.contains("\"" + tool + "\""), "Expected tool " + tool + " in tools/list");
+    }
+
+    String findResp =
+        mcp.handleRequest(
+            """
+            {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"find_condition","arguments":{"runId":"run_A","topic":"/SystemStats/BatteryVoltage","operator":"<","threshold":7.0}}}""");
+    assertTrue(
+        findResp.contains("\\\"matchingSamples\\\":1") && findResp.contains("\"isError\":false"),
+        "Expected 1 sample < 7.0V in find_condition, got: " + findResp);
+
+    String voiceResp =
+        mcp.handleRequest(
+            """
+            {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_voice_notes","arguments":{"query":"truss"}}}""");
+    assertTrue(
+        voiceResp.contains("Pose jumped near center truss"),
+        "Expected voice note match in search_voice_notes");
+
+    String snapResp =
+        mcp.handleRequest(
+            """
+            {"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_camera_snapshots","arguments":{"runId":"run_A"}}}""");
+    assertTrue(
+        snapResp.contains("limelightsc1_t3.50s_jump.jpg") && snapResp.contains("POSE_JUMP"),
+        "Expected camera snapshot in get_camera_snapshots");
+
+    String cmpResp =
+        mcp.handleRequest(
+            """
+            {"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"compare_runs","arguments":{"runA":"run_A","runB":"run_B"}}}""");
+    assertTrue(
+        cmpResp.contains("deltaMinVoltage"), "Expected deltaMinVoltage in compare_runs");
+
+    String vidResp =
+        mcp.handleRequest(
+            """
+            {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_video_frames","arguments":{"runId":"run_A","timestampSec":4.0}}}""");
+    assertTrue(
+        vidResp.contains("youtu.be/abc123xyz?t="), "Expected YouTube jump link in get_video_frames");
+  }
+
+  private static Path createSampleFluxFigDirectory() throws Exception {
+    Path dir = Files.createTempDirectory("sample-fluxfig");
+    Files.writeString(
+        dir.resolve("parameters.csv"),
+        """
+        Key,Type,Unit,@DEFAULT,@COMP_2027,@FUEL,Description
+        pigeonId,int,id,20,20,20,Pigeon 2 IMU CAN ID
+        wheelRadiusMeters,double,m,0.05080,0.05080,0.05080,Effective swerve wheel radius
+        driveGearRatio,double,ratio,6.3947,6.3947,6.3947,Swerve drive gear ratio
+        swerveCouplingRatio,double,ratio,3.5714,3.5714,3.5714,Steer to drive coupling ratio
+        flDriveId,int,id,2,2,2,FL Drive ID
+        flSteerId,int,id,1,1,1,FL Steer ID
+        flCancoderId,int,id,21,21,21,FL CANcoder ID
+        frDriveId,int,id,4,4,4,FR Drive ID
+        frSteerId,int,id,3,3,3,FR Steer ID
+        frCancoderId,int,id,22,22,22,FR CANcoder ID
+        blDriveId,int,id,6,6,6,BL Drive ID
+        blSteerId,int,id,5,5,5,BL Steer ID
+        blCancoderId,int,id,23,23,23,BL CANcoder ID
+        brDriveId,int,id,8,8,8,BR Drive ID
+        brSteerId,int,id,7,7,7,BR Steer ID
+        brCancoderId,int,id,24,24,24,BR CANcoder ID
+        """,
+        StandardCharsets.UTF_8);
+
+    Files.writeString(
+        dir.resolve("mechanisms.csv"),
+        """
+        robot,mechanism,motorId,canBus,statorLimitAmps,supplyLimitAmps,slipCurrentAmps,gravityType,kP,kI,kD,kS,kV,kA,kG,minPosRot,maxPosRot,followerMotorId,invertFollower,motorInverted,gearRatio
+        COMP_2027,Elevator,30,can_s2,60.0,40.0,60.0,Elevator_Static,2.5,0.0,0.1,0.15,0.11,0.01,0.30,0.0,45.0,31,true,false,12.0
+        COMP_2027,Arm,32,can_s2,40.0,30.0,40.0,Arm_Cosine,4.0,0.0,0.2,0.12,0.80,0.02,0.25,-0.25,0.50,-1,false,false,48.0
+        """,
+        StandardCharsets.UTF_8);
+
+    Files.writeString(
+        dir.resolve("batteries.csv"),
+        """
+        batteryName,qrCode,purchaseYear,nominalRintMilliOhms,maxAllowedRintMilliOhms
+        2027-B01,QR-2027-B01,2026,15.5,24.0
+        """,
+        StandardCharsets.UTF_8);
+    return dir;
   }
 
   private static void assertTrue(boolean cond, String msg) {

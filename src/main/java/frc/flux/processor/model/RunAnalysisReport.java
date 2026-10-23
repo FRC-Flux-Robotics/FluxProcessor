@@ -1,5 +1,6 @@
 package frc.flux.processor.model;
 
+import java.util.Collections;
 import java.util.List;
 
 /** Complete structured analysis output for a single match or practice run. */
@@ -26,7 +27,10 @@ public record RunAnalysisReport(
     List<ShotEvent> shots,
     List<VoiceCorrelation> voiceCorrelations,
     List<TimelinePoint> timeline,
-    SystemHealthMetrics systemHealth) {
+    SystemHealthMetrics systemHealth,
+    ShopStressGateMetrics shopStressGate,
+    List<ElevatorCycleEvent> elevatorCycles,
+    List<CameraSnapshotRef> cameraSnapshots) {
 
   public RunAnalysisReport(
       String runId,
@@ -74,7 +78,63 @@ public record RunAnalysisReport(
         shots,
         voiceCorrelations,
         timeline,
-        null);
+        null,
+        null,
+        Collections.emptyList(),
+        Collections.emptyList());
+  }
+
+  public RunAnalysisReport(
+      String runId,
+      String robotName,
+      String matchType,
+      String allianceStation,
+      boolean isFmsMatch,
+      String namedBattery,
+      String gitSha,
+      String configSha,
+      String videoUrl,
+      double videoOffsetSeconds,
+      double totalDurationSec,
+      double enabledDurationSec,
+      double totalDistanceMeters,
+      double peakSpeedMps,
+      String overallVerdict,
+      List<String> keyAlerts,
+      BatteryMetrics battery,
+      List<CornerMetrics> swerveCorners,
+      List<MechanismMetrics> mechanisms,
+      List<ShotEvent> shots,
+      List<VoiceCorrelation> voiceCorrelations,
+      List<TimelinePoint> timeline,
+      SystemHealthMetrics systemHealth) {
+    this(
+        runId,
+        robotName,
+        matchType,
+        allianceStation,
+        isFmsMatch,
+        namedBattery,
+        gitSha,
+        configSha,
+        videoUrl,
+        videoOffsetSeconds,
+        totalDurationSec,
+        enabledDurationSec,
+        totalDistanceMeters,
+        peakSpeedMps,
+        overallVerdict,
+        keyAlerts,
+        battery,
+        swerveCorners,
+        mechanisms,
+        shots,
+        voiceCorrelations,
+        timeline,
+        systemHealth,
+        null,
+        Collections.emptyList(),
+        Collections.emptyList());
   }
 
   public record BatteryMetrics(
@@ -183,4 +243,41 @@ public record RunAnalysisReport(
       String severity,
       String anomalySummary,
       String actionableDecision) {}
+
+  /**
+   * Automated pass/fail gate metrics for the 5m x 3m {@code ShopStressSuiteCmd} &amp; {@code
+   * VirtualGeofence} torture suite (PLAN-2027 Section 6.I.5).
+   */
+  public record ShopStressGateMetrics(
+      boolean present,
+      int geofenceBreachCount,
+      double figure8LoopClosureDriftCm,
+      double maxCameraHandoffStepCm,
+      double cornerCurrentSpreadPct,
+      String overallGateStatus,
+      List<String> gateChecks) {}
+
+  /**
+   * Discrete 2027 Elevator + Arm superstructure scoring cycle ({@code L1..L4}) and keep-out
+   * interlock verification event.
+   */
+  public record ElevatorCycleEvent(
+      int cycleNumber,
+      String targetLevel,
+      double startTimeSec,
+      double durationSec,
+      double peakElevatorPosRot,
+      double peakArmPosRot,
+      double peakStatorAmps,
+      double minBatteryVoltage,
+      boolean keepOutInterlockTriggered,
+      String status) {}
+
+  /** Event-triggered on-robot camera snapshot ({@code cam-snapshots/*.jpg}) correlated to log time. */
+  public record CameraSnapshotRef(
+      String fileName,
+      String cameraName,
+      double timestampSec,
+      String triggerReason,
+      String relativePath) {}
 }

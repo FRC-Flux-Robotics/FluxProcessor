@@ -4,36 +4,66 @@ plugins {
 }
 
 group = 'frc.flux'
-version = '0.1.0'
+version = '2.0.0'
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release.set(25)
+    options.compilerArgs += ['-Xlint:all,-serial', '-Werror']
 }
 
 application {
     mainClass = 'frc.flux.processor.FluxProcessorMain'
 }
 
-repositories {
-    mavenCentral()
-}
-
 dependencies {
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.1'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation files('libs/fluxfig-1.0.0.jar')
 }
 
-test {
-    useJUnitPlatform()
+tasks.register('syncLocalFluxFig', Copy) {
+    onlyIf { file('../FluxFig/dist/fluxfig.jar').exists() }
+    from file('../FluxFig/dist/fluxfig.jar')
+    into file('libs')
+    rename { 'fluxfig-1.0.0.jar' }
+}
+
+compileJava.dependsOn 'syncLocalFluxFig'
+
+tasks.register('runFluxProcessorTests', JavaExec) {
+    group = 'verification'
+    description = 'Runs the zero-dependency FluxProcessorTest suite with assertions enabled.'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'frc.flux.processor.FluxProcessorTest'
+    enableAssertions = true
+}
+
+tasks.named('test') {
+    dependsOn tasks.named('runFluxProcessorTests')
 }
 
 jar {
+    archiveFileName = 'flux-processor.jar'
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes(
             'Main-Class': 'frc.flux.processor.FluxProcessorMain',
             'Implementation-Title': 'FluxProcessor',
             'Implementation-Version': project.version
         )
+    }
+    doLast {
+        copy {
+            from archiveFile
+            into file("${projectDir}/dist")
+            rename { 'flux-processor.jar' }
+        }
     }
 }

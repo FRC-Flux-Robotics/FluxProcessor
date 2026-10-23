@@ -1,0 +1,13 @@
+.gradle/
+build/
+output/
+*.wpilog
+*.hoot
+.git/objects/**
+.git/logs/**
+.git/hooks/**
+!.git/HEAD
+!.git/config
+!.git/refs/**
+!.git/packed-refs
+!.git/reftable/**

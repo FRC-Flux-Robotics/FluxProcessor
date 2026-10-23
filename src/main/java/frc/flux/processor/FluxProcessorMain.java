@@ -1,7 +1,9 @@
 package frc.flux.processor;
 
+import frc.flux.processor.analysis.DigitalTwinCalibrator;
 import frc.flux.processor.analysis.RunAnalyzer;
 import frc.flux.processor.hoot.HootConverter;
+import frc.flux.processor.mcp.FluxMcpServer;
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.report.HtmlReportGenerator;
@@ -17,11 +19,14 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * CLI entry point for {@code FluxProcessor}.
+ * CLI &amp; MCP server entry point for {@code FluxProcessor} v2.0.
  *
  * <pre>
  * Usage:
- *   java -jar flux-processor.jar &lt;input-dir&gt; [--out &lt;output-dir&gt;] [--robot AUTO|FUEL|CORAL|&lt;NAME&gt;] [--profile &lt;robot-profile.json&gt;] [--no-merge]
+ *   java -jar flux-processor.jar &lt;input-dir&gt; [--out &lt;output-dir&gt;] [--robot AUTO|COMP_2027|FUEL|CORAL|&lt;NAME&gt;]
+ *        [--config-dir &lt;fluxfig-csv-dir&gt;] [--profile &lt;robot-profile.json&gt;]
+ *        [--calibrate-sim [&lt;fluxfig-csv-dir&gt;]] [--owlet &lt;path&gt;] [--no-merge]
+ *   java -jar flux-processor.jar --mcp [&lt;input-dir&gt;] [--robot AUTO|COMP_2027|FUEL|CORAL]
  * </pre>
  */
 public final class FluxProcessorMain {
@@ -32,14 +37,26 @@ public final class FluxProcessorMain {
       return;
     }
 
-    Path inputDir = Paths.get(args[0]);
+    Path inputDir = null;
     Path outputDir = null;
     Path owletPath = null;
+    Path configDir = null;
+    Path calibrateSimDir = null;
+    boolean calibrateSimRequested = false;
+    boolean mcpMode = false;
+    String requestedRobotName = "AUTO";
     RobotProfile profile = RobotProfile.AUTO;
     boolean writeMerged = true;
 
-    for (int i = 1; i < args.length; i++) {
-      switch (args[i]) {
+    for (int i = 0; i < args.length; i++) {
+      String arg = args[i];
+      switch (arg) {
+        case "--mcp" -> {
+          mcpMode = true;
+          if (i + 1 < args.length && !args[i + 1].startsWith("-") && inputDir == null) {
+            inputDir = Paths.get(args[++i]);
+          }
+        }
         case "--out", "-o" -> {
           if (i + 1 < args.length) {
             outputDir = Paths.get(args[++i]);
@@ -50,14 +67,27 @@ public final class FluxProcessorMain {
             owletPath = Paths.get(args[++i]);
           }
         }
+        case "--config-dir", "--fluxfig" -> {
+          if (i + 1 < args.length) {
+            configDir = Paths.get(args[++i]);
+          }
+        }
+        case "--calibrate-sim" -> {
+          calibrateSimRequested = true;
+          if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
+            calibrateSimDir = Paths.get(args[++i]);
+          }
+        }
         case "--profile", "-p" -> {
           if (i + 1 < args.length) {
             profile = RobotProfile.fromJson(Paths.get(args[++i]));
+            requestedRobotName = profile.robotName();
           }
         }
         case "--robot", "-r" -> {
           if (i + 1 < args.length) {
             String raw = args[++i].trim();
+            requestedRobotName = raw;
             String upper = raw.toUpperCase(Locale.ROOT);
             if ("FUEL".equals(upper)) {
               profile = RobotProfile.FUEL;
@@ -78,11 +108,26 @@ public final class FluxProcessorMain {
           }
         }
         case "--no-merge" -> writeMerged = false;
-        default -> {}
+        default -> {
+          if (!arg.startsWith("-") && inputDir == null) {
+            inputDir = Paths.get(arg);
+          }
+        }
       }
     }
 
-    if (!Files.exists(inputDir)) {
+    if (configDir != null && Files.isDirectory(configDir)) {
+      profile = RobotProfile.fromFluxFigDirectory(configDir, requestedRobotName);
+    }
+
+    if (mcpMode) {
+      Path mcpRoot = inputDir != null ? inputDir : Paths.get(".");
+      FluxMcpServer server = new FluxMcpServer(mcpRoot, profile);
+      server.serveStdio(System.in, System.out);
+      return;
+    }
+
+    if (inputDir == null || !Files.exists(inputDir)) {
       System.err.println("Error: Input path does not exist: " + inputDir);
       System.exit(1);
     }
@@ -101,7 +146,7 @@ public final class FluxProcessorMain {
         "==========================================================================================");
     System.out.printf(
         Locale.US,
-        " FLUX PROCESSOR v0.1  •  Robot Profile: %s  •  Found %d run(s)%n",
+        " FLUX PROCESSOR v2.0  •  Robot Profile: %s  •  Found %d run(s)%n",
         profile.robotName(),
         runDirs.size());
     System.out.println(
@@ -134,6 +179,26 @@ public final class FluxProcessorMain {
     }
 
     HtmlReportGenerator.writeBatchSummary(reports, outputDir);
+
+    if (calibrateSimRequested) {
+      Path targetCfgDir = calibrateSimDir != null ? calibrateSimDir : configDir;
+      DigitalTwinCalibrator.SimCalibrationSummary calSummary =
+          DigitalTwinCalibrator.calibrateAndWrite(
+              reports, runDirs, targetCfgDir, outputDir, requestedRobotName);
+      System.out.println(
+          "------------------------------------------------------------------------------------------");
+      System.out.printf(
+          Locale.US,
+          " Digital-Twin Sim Calibration (%s): wheelRadius=%.5f m, coupling=%.4f, batteries=%d, mechs=%d, ConfigSHA=%s%n",
+          calSummary.targetProfile(),
+          calSummary.calibratedWheelRadiusMeters(),
+          calSummary.calibratedCouplingRatio(),
+          calSummary.calibratedBatteries().size(),
+          calSummary.calibratedMechanisms().size(),
+          calSummary.updatedConfigSha256());
+      System.out.println(" Sim Calibration JSON: " + calSummary.summaryJsonPath());
+    }
+
     System.out.println(
         "------------------------------------------------------------------------------------------");
     System.out.println(" Season Index HTML : " + outputDir.resolve("runs-index.html"));
@@ -180,9 +245,20 @@ public final class FluxProcessorMain {
   private static void printUsage() {
     System.out.println(
         """
-        FluxProcessor — FRC Team 10413 (FLUX Robotics) Automated Log, Voice & Video Analyzer
+        FluxProcessor v2.0 — FRC Team 10413 (FLUX Robotics) Automated Log, Voice, Video, Digital-Twin & MCP Analyzer
         Usage:
-          java -jar flux-processor.jar <input-dir> [--out <output-dir>] [--robot FUEL|CORAL] [--owlet <path>] [--no-merge]
+          java -jar flux-processor.jar <input-dir> [options]
+          java -jar flux-processor.jar --mcp [<input-dir>] [--robot AUTO|COMP_2027|FUEL|CORAL|<NAME>]
+
+        Options:
+          --out, -o <dir>              Output directory for reports and merged.wpilog (default: <input-dir>)
+          --robot, -r <name>           Robot profile: AUTO (default), COMP_2027, PRACTICE_2027, FUEL, CORAL, or custom
+          --config-dir <dir>           Load robot parameters & mechanisms directly from a FluxFig CSV directory
+          --profile, -p <file.json>    Load custom robot CAN/topic mapping from robot-profile.json
+          --calibrate-sim [<cfg-dir>]  Extract battery R_int, wheel radius, coupling & mechanism (kS,kV,kA,kG) into FluxFig CSVs
+          --mcp [<input-dir>]          Start JSON-RPC 2.0 stdio Model Context Protocol (MCP) server (8 multimodal tools)
+          --owlet <path>               Path to CTRE owlet CLI for .hoot -> .wpilog conversion
+          --no-merge                   Skip writing merged.wpilog
         """);
   }
 }

@@ -1,0 +1,41 @@
+# GCP Cloud Build Pipeline for Standalone FluxProcessor Post-Match Analyzer & MCP Server
+#
+# Run manually:
+#   gcloud builds submit /usr/local/google/home/tvaroska/robotics/FluxProcessor \
+#     --config=/usr/local/google/home/tvaroska/robotics/FluxProcessor/cloudbuild.yaml
+
+steps:
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    id: "pull-fluxfig-from-gcs"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        mkdir -p /workspace/libs
+        if gcloud storage cp gs://btvaroska/frc-10413/libs/fluxfig-latest.jar /workspace/libs/fluxfig-1.0.0.jar 2>/dev/null; then
+          echo "Pulled latest fluxfig-latest.jar from GCS into /workspace/libs/fluxfig-1.0.0.jar"
+        else
+          echo "Using committed /workspace/libs/fluxfig-1.0.0.jar"
+        fi
+
+  - name: "eclipse-temurin:25-jdk"
+    id: "compile-test-and-package-fluxprocessor"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        chmod +x ./scripts/build.sh
+        ./scripts/build.sh
+
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    id: "publish-fluxprocessor-jar-to-gcs"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -euo pipefail
+        gcloud storage cp dist/flux-processor.jar gs://btvaroska/frc-10413/tools/flux-processor-latest.jar
+        gcloud storage cp dist/flux-processor.jar gs://btvaroska/frc-10413/tools/flux-processor-2.0.0.jar
+        echo "Published gs://btvaroska/frc-10413/tools/flux-processor-latest.jar"

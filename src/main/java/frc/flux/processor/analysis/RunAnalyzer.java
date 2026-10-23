@@ -3,8 +3,11 @@ package frc.flux.processor.analysis;
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
+import frc.flux.processor.model.RunAnalysisReport.CameraSnapshotRef;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
+import frc.flux.processor.model.RunAnalysisReport.ElevatorCycleEvent;
 import frc.flux.processor.model.RunAnalysisReport.MechanismMetrics;
+import frc.flux.processor.model.RunAnalysisReport.ShopStressGateMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ShotEvent;
 import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
 import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
@@ -37,8 +40,8 @@ import java.util.stream.Stream;
  */
 public final class RunAnalyzer {
 
-  private static final double BROWNOUT_WARN_VOLTS = 7.0;
-  private static final double BROWNOUT_CRIT_VOLTS = 6.8;
+  private static final double BROWNOUT_WARN_VOLTS = BatteryAnalyzer.BROWNOUT_WARN_VOLTS;
+  private static final double BROWNOUT_CRIT_VOLTS = BatteryAnalyzer.BROWNOUT_CRIT_VOLTS;
   private static final double LOOKBACK_WINDOW_SEC = 6.0;
 
   public record VoiceUtterance(String role, double timeSec, String text) {}
@@ -51,16 +54,16 @@ public final class RunAnalyzer {
       double videoOffsetSec,
       List<VoiceUtterance> voiceNotes) {}
 
-  /** Analyzes a directory containing {@code .wpilog} files (and optional {@code .meta.json}). */
+  /** Analyzes a directory containing {@code .wpilog} files (and optional {@code run-meta.json}). */
   public static RunAnalysisReport analyzeRunDirectory(
       Path runDir, RobotProfile profile, boolean writeMergedWpilog) throws IOException {
     return analyzeRunDirectory(runDir, runDir, profile, writeMergedWpilog);
   }
 
   /**
-   * Analyzes a directory containing {@code .wpilog} files (and optional {@code .meta.json}),
-   * optionally reading converted {@code .wpilog} files from and writing {@code merged.wpilog} to
-   * {@code outRunDir} so {@code runDir} stays read-only.
+   * Analyzes a directory containing {@code .wpilog} files (and optional {@code run-meta.json} or
+   * {@code *.meta.json}), optionally reading converted {@code .wpilog} files from and writing
+   * {@code merged.wpilog} to {@code outRunDir} so {@code runDir} stays read-only.
    */
   public static RunAnalysisReport analyzeRunDirectory(
       Path runDir, Path outRunDir, RobotProfile profile, boolean writeMergedWpilog)
@@ -98,7 +101,7 @@ public final class RunAnalyzer {
       allLogs.add(WpiLogReader.read(p));
     }
 
-    // Resolve AUTO or external robot-profile.json against the actual topics present in allLogs
+    // Resolve AUTO, /FluxFig/EffectiveSnapshot, or robot-profile.json against allLogs
     profile = RobotProfile.resolveForLogs(profile, allLogs, runDir);
 
     ParsedLog rioLog = null;
@@ -146,7 +149,7 @@ public final class RunAnalyzer {
       rioLog = allLogs.get(0);
     }
 
-    RunMeta meta = loadRunMeta(runDir, profile.robotName());
+    RunMeta meta = loadRunMeta(runDir, profile.robotName(), allLogs);
     String runId = runDir.getFileName().toString();
 
     long globalMinUs = Long.MAX_VALUE;
@@ -318,17 +321,17 @@ public final class RunAnalyzer {
     }
 
     // 1. Battery Health & Internal Resistance Analysis
-    BatteryMetrics battery = analyzeBattery(meta.namedBattery(), timeline, enableDropouts);
+    BatteryMetrics battery = BatteryAnalyzer.analyze(meta.namedBattery(), timeline, enableDropouts);
 
     // 2. 4-Corner Swerve Symmetry Audit (scoped to active window [t0Us, windowEndUs])
     List<CornerMetrics> swerveCorners =
-        analyzeSwerveSymmetry(profile, allLogs, driveLog, t0Us, windowEndUs);
+        SwerveSymmetryAnalyzer.analyze(profile, allLogs, driveLog, t0Us, windowEndUs);
 
     // 3. Mechanism Audit (scoped to active window [t0Us, windowEndUs])
     List<MechanismMetrics> mechanisms =
         analyzeMechanisms(profile, allLogs, mechLog, t0Us, windowEndUs);
 
-    // 4. Discrete Shot / Feed / Cycle Event Detection
+    // 4. Discrete Shot / Feed / Cycle Event Detection + 2027 Elevator Cycles
     List<ShotEvent> shots =
         detectShots(
             timeline,
@@ -340,15 +343,26 @@ public final class RunAnalyzer {
             meta.videoOffsetSec(),
             firstEnableUs);
 
-    // 5. Voice-to-Sensor 6-Second Lookback Correlation
+    List<ElevatorCycleEvent> elevatorCycles =
+        ShopStressAndElevatorAnalyzer.detectElevatorCycles(
+            profile, allLogs, mechLog, timeline, t0Us, windowEndUs);
+
+    // 5. 5m x 3m ShopStressSuiteCmd & VirtualGeofence Pass Gates + Camera Snapshots
+    ShopStressGateMetrics shopStressGate =
+        ShopStressAndElevatorAnalyzer.analyzeShopStressGate(
+            allLogs, swerveCorners, t0Us, windowEndUs);
+    List<CameraSnapshotRef> cameraSnapshots =
+        ShopStressAndElevatorAnalyzer.discoverCameraSnapshots(runDir);
+
+    // 6. Voice-to-Sensor 6-Second Lookback Correlation
     List<VoiceCorrelation> voiceCorrelations =
         correlateVoiceNotes(
             meta.voiceNotes(),
             timeline,
             shots,
+            elevatorCycles,
+            cameraSnapshots,
             battery,
-            swerveCorners,
-            mechanisms,
             meta.videoUrl(),
             meta.videoOffsetSec(),
             firstEnableUs,
@@ -411,7 +425,21 @@ public final class RunAnalyzer {
       }
     }
 
-    // 6. Offline SystemCore / Controller Watch Metrics (system-snapshot.txt + .wpilog Performance)
+    if (shopStressGate != null && shopStressGate.present()) {
+      if ("FAIL".equals(shopStressGate.overallGateStatus())) {
+        overallVerdict = "CRITICAL";
+      } else if ("WARN".equals(shopStressGate.overallGateStatus())
+          && "PASS".equals(overallVerdict)) {
+        overallVerdict = "WARN";
+      }
+      for (String gc : shopStressGate.gateChecks()) {
+        if (gc.startsWith("[FAIL]") || gc.startsWith("[WARN]")) {
+          alerts.add("ShopStress 5m x 3m Gate " + gc);
+        }
+      }
+    }
+
+    // 7. Offline SystemCore / Controller Watch Metrics (system-snapshot.txt + .wpilog Performance)
     SystemHealthMetrics systemHealth =
         SystemHealthWatchAnalyzer.analyze(runDir, allLogs, t0Us, windowEndUs, firstEnableUs);
     if (systemHealth != null) {
@@ -481,7 +509,10 @@ public final class RunAnalyzer {
         shots,
         voiceCorrelations,
         timeline,
-        systemHealth);
+        systemHealth,
+        shopStressGate,
+        elevatorCycles,
+        cameraSnapshots);
   }
 
   private static List<TimelinePoint> buildTimeline(
@@ -560,7 +591,9 @@ public final class RunAnalyzer {
       for (ParsedLog log : allLogs) {
         for (Map.Entry<String, List<DoubleSample>> e : log.allDoubleSeries().entrySet()) {
           String k = e.getKey().toLowerCase(Locale.ROOT);
-          if ((k.endsWith("batteryvoltage") || k.endsWith("supplyvoltage") || k.endsWith("busvoltage"))
+          if ((k.endsWith("batteryvoltage")
+                  || k.endsWith("supplyvoltage")
+                  || k.endsWith("busvoltage"))
               && !e.getValue().isEmpty()) {
             voltageSources.add(e.getValue());
             if (voltageSources.size() >= 3) {
@@ -581,7 +614,8 @@ public final class RunAnalyzer {
     for (RobotProfile.CornerConfig c : profile.corners().values()) {
       driveStators.add(findDoubleSeriesByTopic(allLogs, driveLog, c.driveStatorTopic()));
       driveSupplies.add(findDoubleSeriesByTopic(allLogs, driveLog, c.driveSupplyTopic()));
-      List<DoubleSample> vSeries = findDoubleSeriesByTopic(allLogs, driveLog, c.driveVelocityTopic());
+      List<DoubleSample> vSeries =
+          findDoubleSeriesByTopic(allLogs, driveLog, c.driveVelocityTopic());
       driveVelocities.add(vSeries);
       String vTopicLower = c.driveVelocityTopic().toLowerCase(Locale.ROOT);
       if (vTopicLower.contains("meterspersec") || vTopicLower.contains("mps")) {
@@ -685,189 +719,6 @@ public final class RunAnalyzer {
               fStator));
     }
     return points;
-  }
-
-  private static BatteryMetrics analyzeBattery(
-      String batteryName, List<TimelinePoint> timeline, int enableDropouts) {
-    double restingV = 12.6;
-    for (TimelinePoint pt : timeline) {
-      if (!pt.enabled() && pt.totalSupplyAmps() < 5.0 && pt.batteryVoltage() > 11.0) {
-        restingV = pt.batteryVoltage();
-        break;
-      }
-    }
-
-    double minV = 14.0;
-    double minVTime = 0.0;
-    double peakSupply = 0.0;
-    double peakDriveStator = 0.0;
-    double warnSec = 0.0;
-    double critSec = 0.0;
-
-    // Linear regression: V_drop = (restingV - V) vs I_effective
-    // Use effective battery current (max of measured supply current and 0.38 * total stator current)
-    double sumX = 0.0;
-    double sumY = 0.0;
-    double sumXX = 0.0;
-    double sumXY = 0.0;
-    double sumYY = 0.0;
-    int n = 0;
-
-    for (int i = 0; i < timeline.size(); i++) {
-      TimelinePoint pt = timeline.get(i);
-      double dt = (i > 0) ? (pt.timeSec() - timeline.get(i - 1).timeSec()) : 0.2;
-      double v = pt.batteryVoltage();
-      if (v > 3.0 && v < minV) {
-        minV = v;
-        minVTime = pt.timeSec();
-      }
-      double effSupply = Math.max(pt.totalSupplyAmps(), pt.totalDriveStatorAmps() * 0.38);
-      if (effSupply > peakSupply) {
-        peakSupply = effSupply;
-      }
-      if (pt.totalDriveStatorAmps() > peakDriveStator) {
-        peakDriveStator = pt.totalDriveStatorAmps();
-      }
-      if (v < BROWNOUT_WARN_VOLTS) {
-        warnSec += dt;
-      }
-      if (v < BROWNOUT_CRIT_VOLTS) {
-        critSec += dt;
-      }
-
-      if (pt.enabled() && effSupply > 15.0 && v > 5.0 && v <= restingV) {
-        double x = effSupply;
-        double y = restingV - v;
-        sumX += x;
-        sumY += y;
-        sumXX += x * x;
-        sumXY += x * y;
-        sumYY += y * y;
-        n++;
-      }
-    }
-
-    if (minV == 14.0) {
-      minV = restingV;
-    }
-
-    double rintOhms = 0.016;
-    double rSquared = 0.0;
-    if (n >= 5 && sumXX > 1e-6) {
-      // Zero-intercept or OLS slope for R_int = dV / dI
-      rintOhms = sumXY / sumXX;
-      double denom = (n * sumXX - sumX * sumX) * (n * sumYY - sumY * sumY);
-      if (denom > 1e-9) {
-        double num = (n * sumXY - sumX * sumY);
-        rSquared = Math.max(0.0, Math.min(1.0, (num * num) / denom));
-      }
-    }
-    double rintMilliOhms = Math.max(8.0, Math.min(60.0, rintOhms * 1000.0));
-
-    String grade;
-    if (minV < BROWNOUT_CRIT_VOLTS || enableDropouts > 0) {
-      grade = "BROWNOUT RISK";
-    } else if (rintMilliOhms <= 16.5) {
-      grade = "EXCELLENT (Comp Tier)";
-    } else if (rintMilliOhms <= 20.5) {
-      grade = "GOOD (Practice/Comp)";
-    } else if (rintMilliOhms <= 25.0) {
-      grade = "FAIR (Practice Only)";
-    } else {
-      grade = "WEAK (Retire / Recell)";
-    }
-
-    return new BatteryMetrics(
-        batteryName,
-        restingV,
-        minV,
-        minVTime,
-        rintMilliOhms,
-        rSquared,
-        peakSupply,
-        peakDriveStator,
-        warnSec,
-        critSec,
-        enableDropouts,
-        grade);
-  }
-
-  private static List<CornerMetrics> analyzeSwerveSymmetry(
-      RobotProfile profile,
-      List<ParsedLog> allLogs,
-      ParsedLog driveLog,
-      long minTsUs,
-      long maxTsUs) {
-    List<CornerMetrics> rawCorners = new ArrayList<>();
-    String[] order = {"FL", "FR", "BL", "BR"};
-
-    for (String key : order) {
-      RobotProfile.CornerConfig cfg = profile.corners().get(key);
-      if (cfg == null) {
-        continue;
-      }
-      List<DoubleSample> dStator = findDoubleSeriesByTopic(allLogs, driveLog, cfg.driveStatorTopic());
-      List<DoubleSample> dSupply = findDoubleSeriesByTopic(allLogs, driveLog, cfg.driveSupplyTopic());
-      List<DoubleSample> dVel = findDoubleSeriesByTopic(allLogs, driveLog, cfg.driveVelocityTopic());
-      List<DoubleSample> sStator = findDoubleSeriesByTopic(allLogs, driveLog, cfg.steerStatorTopic());
-
-      double meanDStator = meanAbsActive(dStator, 2.0, minTsUs, maxTsUs);
-      double peakDStator = maxAbs(dStator, minTsUs, maxTsUs);
-      double meanDSupply = meanAbsActive(dSupply, 1.0, minTsUs, maxTsUs);
-      double peakDVel = maxAbs(dVel, minTsUs, maxTsUs);
-      double meanSStator = meanAbsActive(sStator, 1.0, minTsUs, maxTsUs);
-      double peakSStator = maxAbs(sStator, minTsUs, maxTsUs);
-
-      rawCorners.add(
-          new CornerMetrics(
-              key,
-              cfg.driveMotorId(),
-              cfg.steerMotorId(),
-              meanDStator,
-              peakDStator,
-              meanDSupply,
-              peakDVel,
-              meanSStator,
-              peakSStator,
-              0.0,
-              "PASS"));
-    }
-
-    // Compute median of meanDriveStatorAmps across the 4 corners
-    List<Double> means =
-        rawCorners.stream().map(CornerMetrics::meanDriveStatorAmps).sorted().toList();
-    double medianMean =
-        means.size() == 4
-            ? 0.5 * (means.get(1) + means.get(2))
-            : (means.isEmpty() ? 1.0 : means.get(0));
-    if (medianMean < 1.0) {
-      medianMean = 1.0;
-    }
-
-    List<CornerMetrics> result = new ArrayList<>(rawCorners.size());
-    for (CornerMetrics c : rawCorners) {
-      double asymPct = ((c.meanDriveStatorAmps() - medianMean) / medianMean) * 100.0;
-      String status = "PASS";
-      if (Math.abs(asymPct) > 35.0) {
-        status = "FAIL";
-      } else if (Math.abs(asymPct) > 22.0 || c.peakDriveStatorAmps() > 140.0) {
-        status = "WARN";
-      }
-      result.add(
-          new CornerMetrics(
-              c.corner(),
-              c.driveId(),
-              c.steerId(),
-              c.meanDriveStatorAmps(),
-              c.peakDriveStatorAmps(),
-              c.meanDriveSupplyAmps(),
-              c.peakDriveVelocityRps(),
-              c.meanSteerStatorAmps(),
-              c.peakSteerStatorAmps(),
-              asymPct,
-              status));
-    }
-    return result;
   }
 
   private static List<MechanismMetrics> analyzeMechanisms(
@@ -1008,9 +859,9 @@ public final class RunAnalyzer {
       List<VoiceUtterance> utterances,
       List<TimelinePoint> timeline,
       List<ShotEvent> shots,
+      List<ElevatorCycleEvent> elevatorCycles,
+      List<CameraSnapshotRef> snapshots,
       BatteryMetrics battery,
-      List<CornerMetrics> corners,
-      List<MechanismMetrics> mechanisms,
       String videoUrl,
       double videoOffsetSec,
       long firstEnableUs,
@@ -1048,6 +899,13 @@ public final class RunAnalyzer {
                 "AUTO-TELEMETRY (Coach View)",
                 first.timestampSec() + 2.0,
                 "Check shooter spin-up and battery load on Shot #" + first.shotNumber()));
+      } else if (effectiveNotes.isEmpty() && !elevatorCycles.isEmpty()) {
+        ElevatorCycleEvent first = elevatorCycles.get(0);
+        effectiveNotes.add(
+            new VoiceUtterance(
+                "AUTO-TELEMETRY (Operator View)",
+                first.startTimeSec() + first.durationSec() + 1.0,
+                "Verify Elevator " + first.targetLevel() + " extension and arm interlock"));
       }
     }
 
@@ -1055,7 +913,7 @@ public final class RunAnalyzer {
       double tSpoken = u.timeSec();
       double tStart = Math.max(0.0, tSpoken - LOOKBACK_WINDOW_SEC);
 
-      // Scan [tStart .. tSpoken] in timeline and shots
+      // Scan [tStart .. tSpoken] in timeline, shots, elevatorCycles, and cameraSnapshots
       double windowMinV = 14.0;
       double windowMinVTime = tStart;
       double windowPeakStator = 0.0;
@@ -1075,6 +933,20 @@ public final class RunAnalyzer {
       for (ShotEvent s : shots) {
         if (s.timestampSec() >= tStart - 1.0 && s.timestampSec() <= tSpoken + 0.5) {
           matchedShot = s;
+        }
+      }
+
+      ElevatorCycleEvent matchedElev = null;
+      for (ElevatorCycleEvent ec : elevatorCycles) {
+        if (ec.startTimeSec() >= tStart - 1.0 && ec.startTimeSec() <= tSpoken + 0.5) {
+          matchedElev = ec;
+        }
+      }
+
+      CameraSnapshotRef matchedSnap = null;
+      for (CameraSnapshotRef snap : snapshots) {
+        if (snap.timestampSec() >= tStart - 1.0 && snap.timestampSec() <= tSpoken + 1.0) {
+          matchedSnap = snap;
         }
       }
 
@@ -1101,6 +973,26 @@ public final class RunAnalyzer {
                 matchedShot.minBatteryVoltageDuringShot(),
                 matchedShot.feederPeakStatorAmps());
         if (!"NOMINAL".equals(matchedShot.status())) {
+          severity = "WARN";
+        }
+      } else if (matchedElev != null) {
+        eventSummary =
+            String.format(
+                Locale.US,
+                "Elevator Cycle #%d (%s) @ %.1fs",
+                matchedElev.cycleNumber(),
+                matchedElev.targetLevel(),
+                matchedElev.startTimeSec());
+        diagnosis =
+            String.format(
+                Locale.US,
+                "Peak Elevator = %.1f rot, Arm = %.2f rot, Peak Stator = %.1f A, Min Battery = %.2f V (Keep-out Interlock: %s).",
+                matchedElev.peakElevatorPosRot(),
+                matchedElev.peakArmPosRot(),
+                matchedElev.peakStatorAmps(),
+                matchedElev.minBatteryVoltage(),
+                matchedElev.keepOutInterlockTriggered() ? "TRIGGERED" : "CLEAR");
+        if (!"NOMINAL".equals(matchedElev.status())) {
           severity = "WARN";
         }
       } else if (windowMinV < 7.5) {
@@ -1131,6 +1023,16 @@ public final class RunAnalyzer {
                 windowPeakStator);
       }
 
+      if (matchedSnap != null) {
+        diagnosis =
+            diagnosis
+                + " [Snapshot: "
+                + matchedSnap.relativePath()
+                + " ("
+                + matchedSnap.triggerReason()
+                + ")]";
+      }
+
       String vLink = buildVideoJumpLink(videoUrl, videoOffsetSec, tStart - enableOffsetSec);
       results.add(
           new VoiceCorrelation(
@@ -1159,7 +1061,12 @@ public final class RunAnalyzer {
     return videoUrl + "#t=" + jumpSec;
   }
 
-  private static RunMeta loadRunMeta(Path runDir, String robotName) throws IOException {
+  /**
+   * Loads run metadata from {@code run-meta.json} (written by {@code FluxTray.jar}), {@code
+   * *.meta.json}, {@code voice-notes.txt}, and {@code .wpilog} {@code /FluxFig/*} metadata topics.
+   */
+  public static RunMeta loadRunMeta(Path runDir, String robotName, List<ParsedLog> allLogs)
+      throws IOException {
     String battery =
         "FUEL".equalsIgnoreCase(robotName)
             ? "FUEL-Comp-Battery"
@@ -1170,71 +1077,193 @@ public final class RunAnalyzer {
     double videoOffsetSec = 0.0;
     List<VoiceUtterance> utterances = new ArrayList<>();
 
-    // Check for .meta.json in runDir
-    try (Stream<Path> s = Files.list(runDir)) {
-      List<Path> metaFiles =
-          s.filter(p -> p.getFileName().toString().endsWith(".meta.json")).toList();
+    // 1. Check .wpilog topics for GitSHA, ConfigSHA256, and NamedBattery first
+    if (allLogs != null) {
+      List<StringSample> wpiBatt =
+          findStringSeries(
+              allLogs,
+              null,
+              List.of(
+                  "/FluxAudit/NamedBattery",
+                  "FluxAudit/NamedBattery",
+                  "/Battery/Name",
+                  "Battery/Name",
+                  "/AdvantageKit/RealOutputs/Battery/Name"));
+      if (!wpiBatt.isEmpty() && !wpiBatt.get(0).value().isBlank()) {
+        battery = wpiBatt.get(0).value().trim();
+      }
+      List<StringSample> wpiGit =
+          findStringSeries(
+              allLogs,
+              null,
+              List.of(
+                  "/FluxFig/GitSHA",
+                  "FluxFig/GitSHA",
+                  "/AdvantageKit/RealOutputs/FluxFig/GitSHA",
+                  "/Metadata/GitSHA",
+                  "GitSHA"));
+      if (!wpiGit.isEmpty() && !wpiGit.get(0).value().isBlank()) {
+        gitSha = wpiGit.get(0).value().trim();
+      }
+      List<StringSample> wpiCfg =
+          findStringSeries(
+              allLogs,
+              null,
+              List.of(
+                  "/FluxFig/ConfigSHA256",
+                  "FluxFig/ConfigSHA256",
+                  "/AdvantageKit/RealOutputs/FluxFig/ConfigSHA256",
+                  "/FluxFig/EffectiveVersion",
+                  "FluxFig/EffectiveVersion"));
+      if (!wpiCfg.isEmpty() && !wpiCfg.get(0).value().isBlank()) {
+        configSha = wpiCfg.get(0).value().trim();
+      }
+    }
+
+    // 2. Check for run-meta.json (FluxTray) or *.meta.json in runDir
+    if (runDir != null && Files.isDirectory(runDir)) {
+      List<Path> metaFiles = new ArrayList<>();
+      Path fluxTrayMeta = runDir.resolve("run-meta.json");
+      if (Files.isRegularFile(fluxTrayMeta)) {
+        metaFiles.add(fluxTrayMeta);
+      }
+      try (Stream<Path> s = Files.list(runDir)) {
+        for (Path p : s.sorted().toList()) {
+          String fn = p.getFileName().toString();
+          if ((fn.endsWith(".meta.json") || fn.equalsIgnoreCase("run-meta.json"))
+              && !metaFiles.contains(p)) {
+            metaFiles.add(p);
+          }
+        }
+      }
       if (!metaFiles.isEmpty()) {
         String json = Files.readString(metaFiles.get(0), StandardCharsets.UTF_8);
-        battery = extractJsonString(json, "namedBattery", battery);
+        // Support both "batteryName" (FluxTray) and "namedBattery"
+        String namedBatt = extractJsonString(json, "namedBattery", "");
+        String battName = extractJsonString(json, "batteryName", "");
+        if (!namedBatt.isBlank() && !"UNSET".equalsIgnoreCase(namedBatt)) {
+          battery = namedBatt;
+        } else if (!battName.isBlank() && !"UNSET".equalsIgnoreCase(battName)) {
+          battery = battName;
+        }
         gitSha = extractJsonString(json, "gitSha", gitSha);
-        configSha = extractJsonString(json, "configSha", configSha);
+        configSha =
+            extractJsonString(
+                json, "configSha", extractJsonString(json, "configSha256", configSha));
         videoUrl = extractJsonString(json, "videoUrl", videoUrl);
         String offsetStr = extractJsonString(json, "videoOffsetSec", "0");
         try {
           videoOffsetSec = Double.parseDouble(offsetStr);
         } catch (NumberFormatException ignored) {
         }
+        utterances.addAll(parseJsonVoiceNotesArray(json));
       }
-    }
 
-    // Check for voice-notes.txt / audio-driver.txt / audio-operator.txt / audio-coach.txt
-    Map<String, String> roleFiles =
-        Map.of(
-            "voice-notes.txt", "DRIVER",
-            "audio-driver.txt", "DRIVER",
-            "audio-operator.txt", "OPERATOR",
-            "audio-coach.txt", "COACH");
-    for (Map.Entry<String, String> entry : roleFiles.entrySet()) {
-      Path f = runDir.resolve(entry.getKey());
-      if (Files.exists(f)) {
-        for (String line : Files.readAllLines(f, StandardCharsets.UTF_8)) {
-          String trimmed = line.trim();
-          if (trimmed.isEmpty() || trimmed.startsWith("#")) {
-            continue;
-          }
-          // Format: "42.0 | DRIVER | Missed short on that far shot" or "42.0: Missed short"
-          String[] parts = trimmed.split("\\|", 3);
-          if (parts.length == 3) {
-            try {
-              double t = Double.parseDouble(parts[0].trim());
-              utterances.add(new VoiceUtterance(parts[1].trim(), t, parts[2].trim()));
-            } catch (NumberFormatException ignored) {
-            }
-          } else {
-            int colon = trimmed.indexOf(':');
-            if (colon > 0) {
-              try {
-                double t = Double.parseDouble(trimmed.substring(0, colon).trim());
-                utterances.add(
-                    new VoiceUtterance(
-                        entry.getValue(), t, trimmed.substring(colon + 1).trim()));
-              } catch (NumberFormatException ignored) {
-              }
-            }
+      // 3. Check for voice-notes.txt / audio-driver.txt / audio-operator.txt / audio-coach.txt
+      Map<String, String> roleFiles =
+          Map.of(
+              "voice-notes.txt", "DRIVER",
+              "audio-driver.txt", "DRIVER",
+              "audio-operator.txt", "OPERATOR",
+              "audio-coach.txt", "COACH");
+      for (Map.Entry<String, String> entry : roleFiles.entrySet()) {
+        Path f = runDir.resolve(entry.getKey());
+        if (Files.exists(f)) {
+          for (String line : Files.readAllLines(f, StandardCharsets.UTF_8)) {
+            parseVoiceLine(line, entry.getValue(), utterances);
           }
         }
       }
     }
+
     utterances.sort(Comparator.comparingDouble(VoiceUtterance::timeSec));
     return new RunMeta(battery, gitSha, configSha, videoUrl, videoOffsetSec, utterances);
   }
 
-  private static String extractJsonString(String json, String key, String fallback) {
-    Pattern p = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"?([^\",}\\s]+)\"?");
-    Matcher m = p.matcher(json);
-    if (m.find()) {
-      return m.group(1);
+  private static List<VoiceUtterance> parseJsonVoiceNotesArray(String json) {
+    List<VoiceUtterance> list = new ArrayList<>();
+    Pattern arrP = Pattern.compile("\"voiceNotes\"\\s*:\\s*\\[(.*?)\\]", Pattern.DOTALL);
+    Matcher arrM = arrP.matcher(json);
+    if (!arrM.find()) {
+      return list;
+    }
+    String body = arrM.group(1).trim();
+    if (body.isEmpty()) {
+      return list;
+    }
+    // Check for JSON objects: {"role":"DRIVER","timeSec":6.2,"text":"..."}
+    Pattern objP = Pattern.compile("\\{([^}]*)\\}");
+    Matcher objM = objP.matcher(body);
+    boolean foundObj = false;
+    while (objM.find()) {
+      foundObj = true;
+      String obj = objM.group(1);
+      String role = extractJsonString(obj, "role", extractJsonString(obj, "speaker", "DRIVER"));
+      String tStr =
+          extractJsonString(
+              obj, "timeSec", extractJsonString(obj, "timestampSec", extractJsonString(obj, "t", "0")));
+      String text =
+          extractJsonString(obj, "text", extractJsonString(obj, "transcript", ""));
+      try {
+        double t = Double.parseDouble(tStr);
+        if (!text.isBlank()) {
+          list.add(new VoiceUtterance(role, t, text));
+        }
+      } catch (NumberFormatException ignored) {
+      }
+    }
+    if (!foundObj) {
+      // Array of strings: ["6.2 | DRIVER | Felt a hard battery sag", ...]
+      Pattern strP = Pattern.compile("\"([^\"]+)\"");
+      Matcher strM = strP.matcher(body);
+      while (strM.find()) {
+        parseVoiceLine(strM.group(1), "DRIVER", list);
+      }
+    }
+    return list;
+  }
+
+  private static void parseVoiceLine(
+      String rawLine, String defaultRole, List<VoiceUtterance> target) {
+    String trimmed = rawLine.trim();
+    if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+      return;
+    }
+    String[] parts = trimmed.split("\\|", 3);
+    if (parts.length == 3) {
+      try {
+        double t = Double.parseDouble(parts[0].trim());
+        target.add(new VoiceUtterance(parts[1].trim(), t, parts[2].trim()));
+      } catch (NumberFormatException ignored) {
+      }
+    } else {
+      int colon = trimmed.indexOf(':');
+      if (colon > 0) {
+        try {
+          double t = Double.parseDouble(trimmed.substring(0, colon).trim());
+          target.add(
+              new VoiceUtterance(defaultRole, t, trimmed.substring(colon + 1).trim()));
+        } catch (NumberFormatException ignored) {
+        }
+      }
+    }
+  }
+
+  public static String extractJsonString(String json, String key, String fallback) {
+    // 1. Match quoted string (preserving spaces inside the string)
+    Pattern quoted = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]*)\"");
+    Matcher qm = quoted.matcher(json);
+    if (qm.find()) {
+      return qm.group(1).trim();
+    }
+    // 2. Match unquoted number/boolean primitive
+    Pattern unquoted = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*([^,}\\s\\]]+)");
+    Matcher um = unquoted.matcher(json);
+    if (um.find()) {
+      String val = um.group(1).trim();
+      if (!"null".equalsIgnoreCase(val)) {
+        return val;
+      }
     }
     return fallback;
   }
@@ -1390,7 +1419,7 @@ public final class RunAnalyzer {
     }
   }
 
-  private static List<DoubleSample> findDoubleSeriesByTopic(
+  public static List<DoubleSample> findDoubleSeriesByTopic(
       List<ParsedLog> allLogs, ParsedLog preferred, String rawTopic) {
     if (rawTopic == null || rawTopic.isBlank()) {
       return Collections.emptyList();
@@ -1408,7 +1437,7 @@ public final class RunAnalyzer {
             "/RealOutputs/" + clean));
   }
 
-  private static List<DoubleSample> findDoubleSeries(
+  public static List<DoubleSample> findDoubleSeries(
       List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
     if (preferred != null) {
       for (String c : candidates) {
@@ -1432,7 +1461,7 @@ public final class RunAnalyzer {
     return Collections.emptyList();
   }
 
-  private static List<BooleanSample> findBooleanSeries(
+  public static List<BooleanSample> findBooleanSeries(
       List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
     if (preferred != null) {
       for (String c : candidates) {
@@ -1456,7 +1485,7 @@ public final class RunAnalyzer {
     return Collections.emptyList();
   }
 
-  private static List<StringSample> findStringSeries(
+  public static List<StringSample> findStringSeries(
       List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
     if (preferred != null) {
       for (String c : candidates) {
@@ -1507,7 +1536,6 @@ public final class RunAnalyzer {
       List<DoubleSample> samples = e.getValue();
       if (!samples.isEmpty()) {
         int id = writer.startEntry(prefix + e.getKey(), "double", "", samples.get(0).timestampUs());
-        // Downsample 250 Hz signals slightly when merging if huge (>25,000 samples) to keep merged file nimble
         int step = samples.size() > 25000 ? 5 : 1;
         for (int i = 0; i < samples.size(); i += step) {
           DoubleSample s = samples.get(i);
@@ -1517,7 +1545,7 @@ public final class RunAnalyzer {
     }
   }
 
-  private static double sampleDoubleAt(List<DoubleSample> series, long tsUs, double fallback) {
+  public static double sampleDoubleAt(List<DoubleSample> series, long tsUs, double fallback) {
     if (series == null || series.isEmpty()) {
       return fallback;
     }
@@ -1604,7 +1632,7 @@ public final class RunAnalyzer {
     return Math.abs(sampleDoubleAt(series, tsUs, fallback));
   }
 
-  private static boolean sampleBooleanAt(List<BooleanSample> series, long tsUs, boolean fallback) {
+  public static boolean sampleBooleanAt(List<BooleanSample> series, long tsUs, boolean fallback) {
     if (series == null || series.isEmpty()) {
       return fallback;
     }
@@ -1624,7 +1652,7 @@ public final class RunAnalyzer {
     return series.get(best).value();
   }
 
-  private static String sampleStringAt(List<StringSample> series, long tsUs, String fallback) {
+  public static String sampleStringAt(List<StringSample> series, long tsUs, String fallback) {
     if (series == null || series.isEmpty()) {
       return fallback;
     }
@@ -1644,7 +1672,7 @@ public final class RunAnalyzer {
     return series.get(best).value();
   }
 
-  private static double meanAbsActive(
+  public static double meanAbsActive(
       List<DoubleSample> series, double minThreshold, long minTsUs, long maxTsUs) {
     if (series == null || series.isEmpty()) {
       return 0.0;
@@ -1664,7 +1692,7 @@ public final class RunAnalyzer {
     return count > 0 ? sum / count : 0.0;
   }
 
-  private static double maxAbs(List<DoubleSample> series, long minTsUs, long maxTsUs) {
+  public static double maxAbs(List<DoubleSample> series, long minTsUs, long maxTsUs) {
     if (series == null || series.isEmpty()) {
       return 0.0;
     }
@@ -1681,7 +1709,7 @@ public final class RunAnalyzer {
     return max;
   }
 
-  private static double minVal(List<DoubleSample> series, long minTsUs, long maxTsUs) {
+  public static double minVal(List<DoubleSample> series, long minTsUs, long maxTsUs) {
     if (series == null || series.isEmpty()) {
       return 0.0;
     }
@@ -1697,7 +1725,7 @@ public final class RunAnalyzer {
     return min == Double.POSITIVE_INFINITY ? 0.0 : min;
   }
 
-  private static double maxVal(List<DoubleSample> series, long minTsUs, long maxTsUs) {
+  public static double maxVal(List<DoubleSample> series, long minTsUs, long maxTsUs) {
     if (series == null || series.isEmpty()) {
       return 0.0;
     }

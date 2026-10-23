@@ -43,7 +43,8 @@ public final class SystemHealthWatchAnalyzer {
         maxFromTopicSuffix(allLogs, "Performance/SuperstructureMs", t0Us, windowEndUs);
     double wpiCpuTempC = maxFromTopicSuffix(allLogs, "CPUTemp", t0Us, windowEndUs);
 
-    if (rawText == null && wpiDriveMaxMs <= 0.0 && wpiVisionMaxMs <= 0.0 && wpiCpuTempC <= 0.0) {
+    boolean hasSnapshot = rawText != null && !rawText.isBlank();
+    if (!hasSnapshot && wpiDriveMaxMs <= 0.0 && wpiVisionMaxMs <= 0.0 && wpiCpuTempC <= 0.0) {
       return null;
     }
 
@@ -55,7 +56,7 @@ public final class SystemHealthWatchAnalyzer {
     boolean canBusOffOrPassive = false;
     String faultedCanBus = "";
 
-    if (rawText != null) {
+    if (hasSnapshot) {
       for (String rawLine : rawText.split("\\R")) {
         String line = rawLine.trim();
         if (line.isEmpty() || line.startsWith("#") || line.startsWith("[")) {
@@ -99,38 +100,44 @@ public final class SystemHealthWatchAnalyzer {
       }
     }
 
-    String controllerType = kv.getOrDefault("controllerType", "SYSTEMCORE");
-    double defaultPeriod = "ROBORIO".equalsIgnoreCase(controllerType) ? 20.0 : 5.0;
+    // Never invent synthetic SYSTEMCORE metrics when system-snapshot.txt is absent
+    String defaultController = inferControllerFromLogs(allLogs);
+    String controllerType =
+        kv.getOrDefault(
+            "controllerType", hasSnapshot ? "SYSTEMCORE" : defaultController + " (WPILOG-ONLY)");
+    boolean isRoboRio = controllerType.toUpperCase(Locale.ROOT).contains("ROBORIO");
+    double defaultPeriod = isRoboRio ? 20.0 : 5.0;
     double loopPeriodMs = parseDouble(kv.get("loopPeriodMs"), defaultPeriod);
-    double loopMedianMs = parseDouble(kv.get("loopMedianMs"), 1.5);
-    double loopP99Ms = parseDouble(kv.get("loopP99Ms"), 2.8);
-    double loopMaxMs = parseDouble(kv.get("loopMaxMs"), 4.1);
-    double firstEnablePeakMs = parseDouble(kv.get("firstEnablePeakMs"), 3.9);
-    double odometryJitterMaxMs = parseDouble(kv.get("odometryJitterMaxMs"), 0.4);
-    double driveTraceMaxMs =
-        Math.max(wpiDriveMaxMs, parseDouble(kv.get("driveTraceMaxMs"), 0.5));
-    double visionTraceMaxMs =
-        Math.max(wpiVisionMaxMs, parseDouble(kv.get("visionTraceMaxMs"), 0.6));
-    double superTraceMaxMs =
-        Math.max(wpiSuperMaxMs, parseDouble(kv.get("superstructureTraceMaxMs"), 0.3));
-
-    double totalCpuPct = parseDouble(kv.get("totalCpuPct"), 42.0);
-    double javaCpuPct = parseDouble(kv.get("javaProcessCpuPct"), 12.0);
-    double visionCpuPct = parseDouble(kv.get("visionDaemonCpuPct"), 25.0);
-    double softIrqPct = parseDouble(kv.get("softIrqPct"), 4.5);
-    double ioWaitPct = parseDouble(kv.get("ioWaitPct"), 0.4);
-    double cpuTempC = Math.max(wpiCpuTempC, parseDouble(kv.get("cpuTempC"), 56.0));
-    double cpuFreqMHz =
+    double loopMedianMs = parseDouble(kv.get("loopMedianMs"), hasSnapshot ? 1.5 : 0.0);
+    double loopP99Ms = parseDouble(kv.get("loopP99Ms"), hasSnapshot ? 2.8 : 0.0);
+    double loopMaxMs =
         parseDouble(
-            kv.get("cpuFreqMHz"), "ROBORIO".equalsIgnoreCase(controllerType) ? 667.0 : 2400.0);
+            kv.get("loopMaxMs"),
+            hasSnapshot ? 4.1 : Math.max(wpiDriveMaxMs + wpiVisionMaxMs + wpiSuperMaxMs, 0.0));
+    double firstEnablePeakMs = parseDouble(kv.get("firstEnablePeakMs"), hasSnapshot ? 3.9 : 0.0);
+    double odometryJitterMaxMs =
+        parseDouble(kv.get("odometryJitterMaxMs"), hasSnapshot ? 0.4 : 0.0);
+    double driveTraceMaxMs =
+        Math.max(wpiDriveMaxMs, parseDouble(kv.get("driveTraceMaxMs"), hasSnapshot ? 0.5 : 0.0));
+    double visionTraceMaxMs =
+        Math.max(wpiVisionMaxMs, parseDouble(kv.get("visionTraceMaxMs"), hasSnapshot ? 0.6 : 0.0));
+
+    double totalCpuPct = parseDouble(kv.get("totalCpuPct"), 0.0);
+    double javaCpuPct = parseDouble(kv.get("javaProcessCpuPct"), 0.0);
+    double visionCpuPct = parseDouble(kv.get("visionDaemonCpuPct"), 0.0);
+    double softIrqPct = parseDouble(kv.get("softIrqPct"), 0.0);
+    double ioWaitPct = parseDouble(kv.get("ioWaitPct"), 0.0);
+    double cpuTempC = Math.max(wpiCpuTempC, parseDouble(kv.get("cpuTempC"), 0.0));
+    double cpuFreqMHz =
+        parseDouble(kv.get("cpuFreqMHz"), hasSnapshot ? (isRoboRio ? 667.0 : 2400.0) : 0.0);
     int throttledFlags = parseHexOrInt(kv.get("throttledHex"), 0);
-    double heapAllocMbPerSec = parseDouble(kv.get("heapAllocRateMbPerSec"), 0.2);
+    double heapAllocMbPerSec = parseDouble(kv.get("heapAllocRateMbPerSec"), 0.0);
     int gcCorrelatedSpikes = (int) parseLong(kv.get("gcCorrelatedLoopSpikes"), 0L);
-    double freeStorageMb = parseDouble(kv.get("freeStorageMb"), 1024.0);
-    double logWriteMaxMs = parseDouble(kv.get("logWriteLatencyMaxMs"), 2.0);
-    double ipc = parseDouble(kv.get("ipc"), 1.4);
-    double llcMissPct = parseDouble(kv.get("llcMissPct"), 3.2);
-    long involCtxSw = parseLong(kv.get("involuntaryContextSwitches"), 10L);
+    double freeStorageMb = parseDouble(kv.get("freeStorageMb"), hasSnapshot ? 1024.0 : 0.0);
+    double logWriteMaxMs = parseDouble(kv.get("logWriteLatencyMaxMs"), 0.0);
+    double ipc = parseDouble(kv.get("ipc"), 0.0);
+    double llcMissPct = parseDouble(kv.get("llcMissPct"), 0.0);
+    long involCtxSw = parseLong(kv.get("involuntaryContextSwitches"), 0L);
 
     List<SystemWatchDecision> decisions = new ArrayList<>();
 
@@ -168,6 +175,7 @@ public final class SystemHealthWatchAnalyzer {
 
     // 3. First-Enable Cold JIT Spike
     if (firstEnablePeakMs > Math.max(12.0, loopPeriodMs * 2.4)
+        && loopMedianMs > 0.0
         && loopMedianMs < loopPeriodMs * 0.7) {
       decisions.add(
           new SystemWatchDecision(
@@ -203,7 +211,8 @@ public final class SystemHealthWatchAnalyzer {
               "Traffic detected on " + oddCanPortName,
               "0 packets on can_s1 / can_s3",
               "CRITICAL",
-              oddCanPortName + " shares an internal 12,500 FPS SPI bus with an even port (Issue #342).",
+              oddCanPortName
+                  + " shares an internal 12,500 FPS SPI bus with an even port (Issue #342).",
               "Decision: Move CAN harness to even port can_s0, can_s2, or can_s4 and update parameters.csv."));
     }
     if (totalCanDrops > 0) {
@@ -222,7 +231,8 @@ public final class SystemHealthWatchAnalyzer {
           new SystemWatchDecision(
               "SocketCAN & SPI",
               "CAN Error State / Bus-Off",
-              String.format(Locale.US, "%s (errors/restarts=%d)", faultedCanBus, totalCanBusErrors),
+              String.format(
+                  Locale.US, "%s (errors/restarts=%d)", faultedCanBus, totalCanBusErrors),
               "ERROR-ACTIVE, 0 errors",
               canBusOffOrPassive ? "CRITICAL" : "WARN",
               "Physical CAN FD frame errors or bus-off transition detected.",
@@ -305,8 +315,8 @@ public final class SystemHealthWatchAnalyzer {
               "Decision: Update JVM launch flags in build.gradle to -XX:+UseZGC -XX:+AlwaysPreTouch -Xms512m -Xmx512m."));
     }
 
-    // 8. Storage & Hardware PMU
-    if (freeStorageMb < 400.0 || ioWaitPct > 5.0 || logWriteMaxMs > 25.0) {
+    // 8. Storage & Hardware PMU (only evaluate when snapshot is present)
+    if (hasSnapshot && (freeStorageMb < 400.0 || ioWaitPct > 5.0 || logWriteMaxMs > 25.0)) {
       decisions.add(
           new SystemWatchDecision(
               "Storage & eMMC I/O",
@@ -318,7 +328,7 @@ public final class SystemHealthWatchAnalyzer {
               "eMMC storage pressure or disk write latency spikes detected.",
               "Decision: Switch camera recording to the Hybrid Event-Driven preset (~4.5 MB/match) and clean old logs."));
     }
-    if ((ipc > 0.0 && ipc < 0.80) || llcMissPct > 15.0 || involCtxSw > 500L) {
+    if (hasSnapshot && ((ipc > 0.0 && ipc < 0.80) || llcMissPct > 15.0 || involCtxSw > 500L)) {
       decisions.add(
           new SystemWatchDecision(
               "ARMv8 Hardware PMU",
@@ -353,6 +363,18 @@ public final class SystemHealthWatchAnalyzer {
         ipc,
         llcMissPct,
         Collections.unmodifiableList(decisions));
+  }
+
+  private static String inferControllerFromLogs(List<ParsedLog> allLogs) {
+    for (ParsedLog log : allLogs) {
+      for (String t : log.entriesByName().keySet()) {
+        String lower = t.toLowerCase(Locale.ROOT);
+        if (lower.contains("systemcore") || lower.contains("limelightsc")) {
+          return "SYSTEMCORE";
+        }
+      }
+    }
+    return "ROBORIO";
   }
 
   private static Path findSnapshotFile(Path runDir) {
