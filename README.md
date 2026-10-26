@@ -55,6 +55,12 @@ No external install is needed if **WPILib 2027** (`C:\Users\Public\wpilib\2027\j
 java -jar dist/flux-processor.jar <path/to/match-logs> --out ./output
 ```
 
+### 3D Student Autonomous Video & Interactive HTML Renderer (`--render-auto`)
+Consumes `student-auto-frames.json` produced by JUnit simulation tests (`StudentAutoSimExporter` in `Flux-SystemCore-2027` or `Flux-RoboRIO-2027`) and renders `student-auto.mp4` and `student-auto.html` (supporting both `EMPTY_FIELD_2027` and `REBUILT_2026_SHOOTING`):
+```bash
+java -jar dist/flux-processor.jar --render-auto <path/to/student-auto-frames.json> --out ./output
+```
+
 ### Digital-Twin Sim Auto-Calibration (`--calibrate-sim`)
 ```bash
 java -jar dist/flux-processor.jar <path/to/run-logs> --calibrate-sim ../Flux-SystemCore-2027/src/main/deploy/configs

@@ -6,6 +6,7 @@ import frc.flux.processor.hoot.HootConverter;
 import frc.flux.processor.mcp.FluxMcpServer;
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
+import frc.flux.processor.report.AutoSimVideoRenderer;
 import frc.flux.processor.report.HtmlReportGenerator;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -42,6 +43,7 @@ public final class FluxProcessorMain {
     Path owletPath = null;
     Path configDir = null;
     Path calibrateSimDir = null;
+    Path renderAutoJson = null;
     boolean calibrateSimRequested = false;
     boolean mcpMode = false;
     String requestedRobotName = "AUTO";
@@ -51,6 +53,11 @@ public final class FluxProcessorMain {
     for (int i = 0; i < args.length; i++) {
       String arg = args[i];
       switch (arg) {
+        case "--render-auto" -> {
+          if (i + 1 < args.length) {
+            renderAutoJson = Paths.get(args[++i]);
+          }
+        }
         case "--mcp" -> {
           mcpMode = true;
           if (i + 1 < args.length && !args[i + 1].startsWith("-") && inputDir == null) {
@@ -124,6 +131,31 @@ public final class FluxProcessorMain {
       Path mcpRoot = inputDir != null ? inputDir : Paths.get(".");
       FluxMcpServer server = new FluxMcpServer(mcpRoot, profile);
       server.serveStdio(System.in, System.out);
+      return;
+    }
+
+    if (renderAutoJson != null) {
+      if (Files.isDirectory(renderAutoJson)) {
+        renderAutoJson = renderAutoJson.resolve("student-auto-frames.json");
+      }
+      if (!Files.exists(renderAutoJson)) {
+        System.err.println("Error: Autonomous frames JSON does not exist: " + renderAutoJson);
+        System.exit(1);
+      }
+      Path autoOutDir =
+          outputDir != null
+              ? outputDir
+              : (renderAutoJson.getParent() != null ? renderAutoJson.getParent() : Paths.get("."));
+      AutoSimVideoRenderer.AutoSimPayload payload =
+          AutoSimVideoRenderer.renderFromJson(renderAutoJson, autoOutDir);
+      System.out.printf(
+          Locale.US,
+          " [AUTO-SIM] Rendered %s (%s) • %d frames, %d shots -> %s%n",
+          payload.routineName(),
+          payload.robotName(),
+          payload.frames().size(),
+          payload.shots().size(),
+          autoOutDir.resolve("student-auto.mp4"));
       return;
     }
 
@@ -258,10 +290,12 @@ public final class FluxProcessorMain {
         FluxProcessor v2.0 — FRC Team 10413 (FLUX Robotics) Automated Log, Voice, Video, Digital-Twin & MCP Analyzer
         Usage:
           java -jar flux-processor.jar <input-dir> [options]
+          java -jar flux-processor.jar --render-auto <student-auto-frames.json> [--out <output-dir>]
           java -jar flux-processor.jar --mcp [<input-dir>] [--robot AUTO|COMP_2027|FUEL|CORAL|<NAME>]
 
         Options:
           --out, -o <dir>              Output directory for reports and merged.wpilog (default: <input-dir>)
+          --render-auto <frames.json>  Render 3D student-auto.mp4 and student-auto.html from autonomous simulation JSON
           --robot, -r <name>           Robot profile: AUTO (default), COMP_2027, PRACTICE_2027, FUEL, CORAL, or custom
           --config-dir <dir>           Load robot parameters & mechanisms directly from a FluxFig CSV directory
           --profile, -p <file.json>    Load custom robot CAN/topic mapping from robot-profile.json

@@ -5,6 +5,7 @@ import frc.flux.processor.analysis.RunAnalyzer;
 import frc.flux.processor.mcp.FluxMcpServer;
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
+import frc.flux.processor.report.AutoSimVideoRenderer;
 import frc.flux.processor.report.HtmlReportGenerator;
 import frc.flux.processor.wpilog.WpiLogReader;
 import frc.flux.processor.wpilog.WpiLogWriter;
@@ -45,7 +46,8 @@ public final class FluxProcessorTest {
     testShopStressGateElevatorCyclesAndWpilogOnlyWatchGuard();
     testDigitalTwinCalibratorCsvWriteBack();
     testMcpServerMultimodalTools();
-    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (9/9)");
+    testStudentAutoVideoRendererCli();
+    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (10/10)");
   }
 
   public static void testWpiLogReadWriteRoundTrip() throws Exception {
@@ -698,6 +700,45 @@ public final class FluxProcessorTest {
             {"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"get_video_frames","arguments":{"runId":"run_A","timestampSec":4.0}}}""");
     assertTrue(
         vidResp.contains("youtu.be/abc123xyz?t="), "Expected YouTube jump link in get_video_frames");
+  }
+
+  public static void testStudentAutoVideoRendererCli() throws Exception {
+    Path autoDir = Files.createTempDirectory("flux-auto-render-test");
+    Path jsonFile = autoDir.resolve("student-auto-frames.json");
+
+    List<AutoSimVideoRenderer.AutoFrame> frames =
+        List.of(
+            new AutoSimVideoRenderer.AutoFrame(
+                0.00, 1.90, 4.10, 0.02, 0.0, 0.0, 0.0, 3.2, 0.0, 0.0, 12.6, 5.0, 45.0, "SHOOTING"),
+            new AutoSimVideoRenderer.AutoFrame(
+                0.04, 1.95, 4.05, 0.05, 1.2, -1.2, 0.4, 3.2, 0.0, 30.0, 12.4, 35.0, 46.0, "INTAKING"),
+            new AutoSimVideoRenderer.AutoFrame(
+                0.08, 2.05, 3.95, 0.10, 1.5, -1.5, 0.5, 3.5, 0.1, 30.0, 12.3, 42.0, 47.0, "SHOOTING"));
+    List<AutoSimVideoRenderer.ShotArc> shots =
+        List.of(
+            new AutoSimVideoRenderer.ShotArc(
+                1, 0.00, 0.65, 1.90, 4.10, 0.52, 4.63, 4.21, 1.83, 2.45, true));
+    List<AutoSimVideoRenderer.FloorFuelBall> balls =
+        List.of(new AutoSimVideoRenderer.FloorFuelBall(2.90, 2.60, 2.20));
+
+    AutoSimVideoRenderer.writeFramesJson(
+        jsonFile,
+        "STUDENT: 2026 Square, Circle & Hub Shooting",
+        "FUEL",
+        frames,
+        shots,
+        balls,
+        true);
+
+    FluxProcessorMain.main(
+        new String[] {
+          "--render-auto", jsonFile.toString(), "--out", autoDir.toString()
+        });
+
+    assertTrue(
+        Files.exists(autoDir.resolve("student-auto.html"))
+            && Files.size(autoDir.resolve("student-auto.html")) > 1000,
+        "Expected student-auto.html to be rendered via FluxProcessor --render-auto");
   }
 
   private static Path createSampleFluxFigDirectory() throws Exception {
