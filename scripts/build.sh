@@ -13,9 +13,9 @@ fi
 rm -rf build/classes/main build/classes/test
 mkdir -p build/classes/main build/classes/test
 
-echo "[1/3] Compiling FluxProcessor (Java 25 bytecode)..."
-javac --release 25 -Xlint:all,-serial -Werror -cp libs/fluxfig-1.0.0.jar -d build/classes/main $(find src/main/java -name "*.java" | sort)
-javac --release 25 -Xlint:all,-serial -Werror -cp build/classes/main:libs/fluxfig-1.0.0.jar -d build/classes/test $(find src/test/java -name "*.java" | sort)
+echo "[1/3] Compiling FluxProcessor (Java 17+ compatible bytecode)..."
+javac --release 17 -Xlint:all,-serial -Werror -cp libs/fluxfig-1.0.0.jar -d build/classes/main $(find src/main/java -name "*.java" | sort)
+javac --release 17 -Xlint:all,-serial -Werror -cp build/classes/main:libs/fluxfig-1.0.0.jar -d build/classes/test $(find src/test/java -name "*.java" | sort)
 
 echo "[2/3] Running FluxProcessor unit & integration tests..."
 java -ea -cp build/classes/main:build/classes/test:libs/fluxfig-1.0.0.jar frc.flux.processor.FluxProcessorTest

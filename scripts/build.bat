@@ -41,13 +41,13 @@ mkdir "build\classes\test"
 if not exist "build\libs" mkdir "build\libs"
 if not exist "dist" mkdir "dist"
 
-echo [1/3] Compiling FluxProcessor (Java 25 bytecode)...
+echo [1/3] Compiling FluxProcessor (Java 17+ compatible bytecode)...
 dir /s /b src\main\java\*.java > build\sources-main.txt
-"%JAVAC_CMD%" --release 25 -encoding UTF-8 -cp "libs\fluxfig-1.0.0.jar" -d build\classes\main @build\sources-main.txt
+"%JAVAC_CMD%" --release 17 -encoding UTF-8 -cp "libs\fluxfig-1.0.0.jar" -d build\classes\main @build\sources-main.txt
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 dir /s /b src\test\java\*.java > build\sources-test.txt
-"%JAVAC_CMD%" --release 25 -encoding UTF-8 -cp "build\classes\main;libs\fluxfig-1.0.0.jar" -d build\classes\test @build\sources-test.txt
+"%JAVAC_CMD%" --release 17 -encoding UTF-8 -cp "build\classes\main;libs\fluxfig-1.0.0.jar" -d build\classes\test @build\sources-test.txt
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 echo [2/3] Running FluxProcessor unit ^& integration tests...

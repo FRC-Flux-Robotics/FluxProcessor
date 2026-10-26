@@ -37,6 +37,14 @@ if not exist "%JAR_PATH%" (
 :: 3. If arguments were passed (CLI or drag-and-drop folder onto run.bat), forward them
 if not "%~1"=="" (
     set "INPUT_TARGET=%~1"
+    :: If the user dragged a student-auto-frames.json file onto run.bat, render the auto video & HTML
+    if /i "%~x1"==".json" (
+        set "AUTO_OUT_DIR=%~dp1"
+        if "!AUTO_OUT_DIR:~-1!"=="\" set "AUTO_OUT_DIR=!AUTO_OUT_DIR:~0,-1!"
+        "%JAVA_CMD%" -jar "%JAR_PATH%" --render-auto "%~f1" --out "!AUTO_OUT_DIR!" %2 %3 %4 %5 %6 %7 %8 %9
+        if exist "!AUTO_OUT_DIR!\student-auto.html" start "" "!AUTO_OUT_DIR!\student-auto.html"
+        exit /b %ERRORLEVEL%
+    )
     :: If the user dragged a .zip archive from pull-logs.bat onto run.bat, extract it first
     if /i "%~x1"==".zip" (
         set "UNZIP_DIR=%~dpn1_extracted"
