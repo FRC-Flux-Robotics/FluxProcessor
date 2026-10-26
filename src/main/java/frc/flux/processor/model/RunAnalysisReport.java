@@ -30,7 +30,65 @@ public record RunAnalysisReport(
     SystemHealthMetrics systemHealth,
     ShopStressGateMetrics shopStressGate,
     List<ElevatorCycleEvent> elevatorCycles,
-    List<CameraSnapshotRef> cameraSnapshots) {
+    List<CameraSnapshotRef> cameraSnapshots,
+    FuelSimMetrics fuelSim) {
+
+  public RunAnalysisReport(
+      String runId,
+      String robotName,
+      String matchType,
+      String allianceStation,
+      boolean isFmsMatch,
+      String namedBattery,
+      String gitSha,
+      String configSha,
+      String videoUrl,
+      double videoOffsetSeconds,
+      double totalDurationSec,
+      double enabledDurationSec,
+      double totalDistanceMeters,
+      double peakSpeedMps,
+      String overallVerdict,
+      List<String> keyAlerts,
+      BatteryMetrics battery,
+      List<CornerMetrics> swerveCorners,
+      List<MechanismMetrics> mechanisms,
+      List<ShotEvent> shots,
+      List<VoiceCorrelation> voiceCorrelations,
+      List<TimelinePoint> timeline,
+      SystemHealthMetrics systemHealth,
+      ShopStressGateMetrics shopStressGate,
+      List<ElevatorCycleEvent> elevatorCycles,
+      List<CameraSnapshotRef> cameraSnapshots) {
+    this(
+        runId,
+        robotName,
+        matchType,
+        allianceStation,
+        isFmsMatch,
+        namedBattery,
+        gitSha,
+        configSha,
+        videoUrl,
+        videoOffsetSeconds,
+        totalDurationSec,
+        enabledDurationSec,
+        totalDistanceMeters,
+        peakSpeedMps,
+        overallVerdict,
+        keyAlerts,
+        battery,
+        swerveCorners,
+        mechanisms,
+        shots,
+        voiceCorrelations,
+        timeline,
+        systemHealth,
+        shopStressGate,
+        elevatorCycles,
+        cameraSnapshots,
+        null);
+  }
 
   public RunAnalysisReport(
       String runId,
@@ -81,7 +139,8 @@ public record RunAnalysisReport(
         null,
         null,
         Collections.emptyList(),
-        Collections.emptyList());
+        Collections.emptyList(),
+        null);
   }
 
   public RunAnalysisReport(
@@ -134,7 +193,8 @@ public record RunAnalysisReport(
         systemHealth,
         null,
         Collections.emptyList(),
-        Collections.emptyList());
+        Collections.emptyList(),
+        null);
   }
 
   public record BatteryMetrics(
@@ -280,4 +340,48 @@ public record RunAnalysisReport(
       double timestampSec,
       String triggerReason,
       String relativePath) {}
+
+  /**
+   * 3D {@code FuelSim} (Team 5000 REBUILT) environment replay summary, per-shot ballistic outcomes,
+   * rendered 3D video filename ({@code replay-3d.mp4}), and 3D playback frames.
+   */
+  public record FuelSimMetrics(
+      int ballsLaunched,
+      int ballsScoredInHub,
+      int ballsMissedOrRebounded,
+      double hubScoringAccuracyPct,
+      int floorBallsIntaked,
+      int blueHubScore,
+      int redHubScore,
+      String videoFileName,
+      List<ShotSimSummary> shotSummaries,
+      List<Sim3DFrame> frames) {}
+
+  public record ShotSimSummary(
+      int shotNumber,
+      double timestampSec,
+      int ballsInBurst,
+      int ballsScored,
+      double launchDistanceM,
+      double launchSpeedMps,
+      double launchPitchDeg,
+      double apexHeightM,
+      String outcome) {}
+
+  public record Sim3DFrame(
+      double timeSec,
+      double robotX,
+      double robotY,
+      double robotHeadingRad,
+      double batteryVoltage,
+      double driveStatorAmps,
+      double shooterRps,
+      double hoodRot,
+      double elevatorHeightM,
+      double armAngleRad,
+      int blueScore,
+      int redScore,
+      int intakedCount,
+      String lastShotBanner,
+      double[] ballXyz) {}
 }

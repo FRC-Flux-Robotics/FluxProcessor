@@ -265,11 +265,34 @@ public final class WpiLogReader {
                   .computeIfAbsent(def.name() + "[" + idx + "]", k -> new ArrayList<>())
                   .add(new BooleanSample(timestampUs, v));
             }
-          } else if (("string".equals(type) || "json".equals(type)) && payloadSize >= 0) {
+          } else if (("string".equals(type) || "json".equals(type) || "structschema".equals(type))
+              && payloadSize >= 0) {
             byte[] strBytes = new byte[payloadSize];
             buf.get(strBytes);
             String v = new String(strBytes, StandardCharsets.UTF_8);
-            stringSeries.computeIfAbsent(def.name(), k -> new ArrayList<>()).add(new StringSample(timestampUs, v));
+            stringSeries
+                .computeIfAbsent(def.name(), k -> new ArrayList<>())
+                .add(new StringSample(timestampUs, v));
+          } else if ("struct:Pose2d".equals(type) && payloadSize == 24) {
+            double px = buf.getDouble();
+            double py = buf.getDouble();
+            double rotRad = buf.getDouble();
+            doubleSeries
+                .computeIfAbsent(def.name() + ".x", k -> new ArrayList<>())
+                .add(new DoubleSample(timestampUs, px));
+            doubleSeries
+                .computeIfAbsent(def.name() + ".y", k -> new ArrayList<>())
+                .add(new DoubleSample(timestampUs, py));
+            doubleSeries
+                .computeIfAbsent(def.name() + ".rotRad", k -> new ArrayList<>())
+                .add(new DoubleSample(timestampUs, rotRad));
+          } else if ("struct:Translation3d[]".equals(type)
+              && payloadSize >= 0
+              && payloadSize % 24 == 0) {
+            int numBalls = payloadSize / 24;
+            doubleSeries
+                .computeIfAbsent(def.name() + ".count", k -> new ArrayList<>())
+                .add(new DoubleSample(timestampUs, numBalls));
           }
         }
       }

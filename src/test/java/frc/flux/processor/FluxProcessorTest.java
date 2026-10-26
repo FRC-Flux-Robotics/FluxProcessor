@@ -168,11 +168,29 @@ public final class FluxProcessorTest {
         "Expected YouTube jump link on voice correlation");
     assertTrue(
         Files.exists(runDir.resolve("merged.wpilog")), "Expected merged.wpilog to be written");
+    WpiLogReader.ParsedLog mergedLog = WpiLogReader.read(runDir.resolve("merged.wpilog"));
+    assertTrue(
+        !mergedLog.getDoubleSeries("/Odometry/Robot.x").isEmpty(),
+        "Expected /Odometry/Robot struct:Pose2d in merged.wpilog");
+    assertTrue(
+        !mergedLog.getDoubleSeries("/FuelSim/Fuels.count").isEmpty(),
+        "Expected /FuelSim/Fuels struct:Translation3d[] in merged.wpilog");
+    assertTrue(
+        mergedLog.entriesByName().containsKey("/.schema/struct:Pose2d")
+            && mergedLog.entriesByName().containsKey("/.schema/struct:Translation3d"),
+        "Expected WPILib structschema definitions in merged.wpilog for AdvantageScope 3D Field");
 
     Path reportHtml = runDir.resolve("report.html");
     HtmlReportGenerator.writeRunReport(report, reportHtml);
     HtmlReportGenerator.writeBatchSummary(List.of(report), runDir);
     assertTrue(Files.exists(reportHtml), "Expected report.html to be generated");
+    assertTrue(
+        report.fuelSim() != null && !report.fuelSim().frames().isEmpty(),
+        "Expected 3D FuelSim frames in RunAnalysisReport");
+    String htmlContent = Files.readString(reportHtml, StandardCharsets.UTF_8);
+    assertTrue(
+        htmlContent.contains("sim3dCanvas") && htmlContent.contains("sim3dFrames"),
+        "Expected interactive 3D FuelSim canvas player in report.html");
     assertTrue(Files.exists(runDir.resolve("runs-index.html")), "Expected runs-index.html");
     assertTrue(
         Files.exists(runDir.resolve("batteries-health.csv")), "Expected batteries-health.csv");

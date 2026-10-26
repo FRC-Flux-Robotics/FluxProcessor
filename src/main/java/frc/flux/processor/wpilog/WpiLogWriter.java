@@ -94,6 +94,59 @@ public final class WpiLogWriter implements Closeable {
     writeRecord(entryId, timestampUs, bytes);
   }
 
+  public void appendInt64(int entryId, long timestampUs, long value) throws IOException {
+    ByteBuffer buf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+    buf.putLong(value);
+    writeRecord(entryId, timestampUs, buf.array());
+  }
+
+  /**
+   * Registers WPILib binary {@code structschema} entries for {@code Pose2d}, {@code Translation2d},
+   * {@code Rotation2d}, and {@code Translation3d} so AdvantageScope 2D/3D Field tabs decode {@code
+   * struct:Pose2d} and {@code struct:Translation3d[]} topics automatically.
+   */
+  public void registerStandardGeometrySchemas(long timestampUs) throws IOException {
+    writeStructSchema("Translation2d", "double x;double y", timestampUs);
+    writeStructSchema("Rotation2d", "double value", timestampUs);
+    writeStructSchema(
+        "Pose2d", "Translation2d translation;Rotation2d rotation", timestampUs);
+    writeStructSchema("Translation3d", "double x;double y;double z", timestampUs);
+  }
+
+  private void writeStructSchema(String structName, String schemaDef, long timestampUs)
+      throws IOException {
+    String topic = "/.schema/struct:" + structName;
+    if (entryIds.containsKey(topic)) {
+      return;
+    }
+    int id = startEntry(topic, "structschema", "", timestampUs);
+    writeRecord(id, timestampUs, schemaDef.getBytes(StandardCharsets.UTF_8));
+  }
+
+  /** Appends a WPILib {@code struct:Pose2d} (24 bytes: {@code x}, {@code y}, {@code rotRad}). */
+  public void appendPose2d(
+      int entryId, long timestampUs, double xMeters, double yMeters, double headingRad)
+      throws IOException {
+    ByteBuffer buf = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
+    buf.putDouble(xMeters);
+    buf.putDouble(yMeters);
+    buf.putDouble(headingRad);
+    writeRecord(entryId, timestampUs, buf.array());
+  }
+
+  /**
+   * Appends a WPILib {@code struct:Translation3d[]} array ({@code 24 * N} bytes: packed {@code x,
+   * y, z} triplets in meters).
+   */
+  public void appendTranslation3dArray(int entryId, long timestampUs, double[] xyzTriplets)
+      throws IOException {
+    ByteBuffer buf = ByteBuffer.allocate(xyzTriplets.length * 8).order(ByteOrder.LITTLE_ENDIAN);
+    for (double v : xyzTriplets) {
+      buf.putDouble(v);
+    }
+    writeRecord(entryId, timestampUs, buf.array());
+  }
+
   public void writeRecord(int entryId, long timestampUs, byte[] payload) throws IOException {
     // Fixed compact encoding: 4-byte entryId, 4-byte payloadSize, 8-byte timestampUs
     int headerByte = (3) | (3 << 2) | (7 << 4);

@@ -165,9 +165,18 @@ public final class FluxProcessorMain {
       Path htmlPath = targetRunOut.resolve("report.html");
       HtmlReportGenerator.writeRunReport(report, htmlPath);
 
+      String fuelSimStr =
+          report.fuelSim() != null
+              ? String.format(
+                  Locale.US,
+                  "%2d/%2d (%3.0f%%)",
+                  report.fuelSim().ballsScoredInHub(),
+                  report.fuelSim().ballsLaunched(),
+                  report.fuelSim().hubScoringAccuracyPct())
+              : "N/A";
       System.out.printf(
           Locale.US,
-          " [%s] %-38s | Batt: %-16s (R_int: %4.1f mΩ, Min: %5.2fV) | Peak Stator: %4.0fA | Shots: %3d | %s%n",
+          " [%s] %-38s | Batt: %-16s (R_int: %4.1f mΩ, Min: %5.2fV) | Peak Stator: %4.0fA | Shots: %2d (FuelSim: %s) | %s%n",
           report.overallVerdict(),
           report.runId(),
           report.battery().batteryName(),
@@ -175,6 +184,7 @@ public final class FluxProcessorMain {
           report.battery().minVoltage(),
           report.battery().peakDriveStatorAmps(),
           report.shots().size(),
+          fuelSimStr,
           htmlPath);
     }
 

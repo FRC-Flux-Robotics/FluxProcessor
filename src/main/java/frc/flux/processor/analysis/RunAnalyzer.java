@@ -6,13 +6,17 @@ import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
 import frc.flux.processor.model.RunAnalysisReport.CameraSnapshotRef;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ElevatorCycleEvent;
+import frc.flux.processor.model.RunAnalysisReport.FuelSimMetrics;
 import frc.flux.processor.model.RunAnalysisReport.MechanismMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ShopStressGateMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ShotEvent;
+import frc.flux.processor.model.RunAnalysisReport.ShotSimSummary;
+import frc.flux.processor.model.RunAnalysisReport.Sim3DFrame;
 import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
 import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
 import frc.flux.processor.model.RunAnalysisReport.TimelinePoint;
 import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
+import frc.flux.processor.report.FuelSimVideoRenderer;
 import frc.flux.processor.wpilog.WpiLogReader;
 import frc.flux.processor.wpilog.WpiLogReader.BooleanSample;
 import frc.flux.processor.wpilog.WpiLogReader.DoubleSample;
@@ -471,19 +475,27 @@ public final class RunAnalyzer {
               battery.estimatedRintMilliOhms()));
     }
 
+    FuelSimMetrics fuelSimMetrics = null;
     if (writeMergedWpilog) {
       Path targetDir = outRunDir != null ? outRunDir : runDir;
       Files.createDirectories(targetDir);
       Path mergedPath = targetDir.resolve("merged.wpilog");
-      writeMergedLog(
-          mergedPath,
-          t0Us,
-          rioLog,
-          driveLog,
-          mechLog,
-          voiceCorrelations,
-          battery,
-          timeline);
+      fuelSimMetrics =
+          writeMergedLog(
+              mergedPath,
+              runId,
+              t0Us,
+              windowEndUs,
+              alliance,
+              profile,
+              allLogs,
+              rioLog,
+              driveLog,
+              mechLog,
+              shots,
+              voiceCorrelations,
+              battery,
+              timeline);
     }
 
     return new RunAnalysisReport(
@@ -512,7 +524,8 @@ public final class RunAnalyzer {
         systemHealth,
         shopStressGate,
         elevatorCycles,
-        cameraSnapshots);
+        cameraSnapshots,
+        fuelSimMetrics);
   }
 
   private static List<TimelinePoint> buildTimeline(
@@ -1268,23 +1281,43 @@ public final class RunAnalyzer {
     return fallback;
   }
 
-  private static void writeMergedLog(
+  private static FuelSimMetrics writeMergedLog(
       Path outPath,
+      String runId,
       long t0Us,
+      long windowEndUs,
+      String alliance,
+      RobotProfile profile,
+      List<ParsedLog> allLogs,
       ParsedLog rioLog,
       ParsedLog driveLog,
       ParsedLog mechLog,
+      List<ShotEvent> shots,
       List<VoiceCorrelation> voiceCorrelations,
       BatteryMetrics battery,
       List<TimelinePoint> timeline)
       throws IOException {
-    try (WpiLogWriter writer = new WpiLogWriter(outPath, "FluxProcessor Merged Log")) {
+    FuelSimMetrics fuelSimMetrics;
+    try (WpiLogWriter writer = new WpiLogWriter(outPath, "FluxProcessor Merged Log + FuelSim 3D")) {
+      writer.registerStandardGeometrySchemas(t0Us);
+
       int eVolt = writer.startEntry("/FluxAudit/BatteryVoltage", "double", "", t0Us);
       int eDriveStator = writer.startEntry("/FluxAudit/TotalDriveStatorAmps", "double", "", t0Us);
       int eSupply = writer.startEntry("/FluxAudit/TotalSupplyAmps", "double", "", t0Us);
       int eSpeed = writer.startEntry("/FluxAudit/ChassisSpeedMps", "double", "", t0Us);
       int eRint = writer.startEntry("/FluxAudit/BatteryEstimatedRintMilliOhms", "double", "", t0Us);
       int eBattName = writer.startEntry("/FluxAudit/NamedBattery", "string", "", t0Us);
+
+      // 3D AdvantageScope & Team 5000 FuelSim entries
+      int eRobotPose = writer.startEntry("/Odometry/Robot", "struct:Pose2d", "", t0Us);
+      int eAkitPose =
+          writer.startEntry("/AdvantageKit/RealOutputs/Odometry/Robot", "struct:Pose2d", "", t0Us);
+      int eFuels = writer.startEntry("/FuelSim/Fuels", "struct:Translation3d[]", "", t0Us);
+      int eBlueScore = writer.startEntry("/FuelSim/BlueHubScore", "int64", "", t0Us);
+      int eRedScore = writer.startEntry("/FuelSim/RedHubScore", "int64", "", t0Us);
+      int eIntaked = writer.startEntry("/FuelSim/IntakedCount", "int64", "", t0Us);
+      int eHopper = writer.startEntry("/FuelSim/HopperCount", "int64", "", t0Us);
+      int eShotStatus = writer.startEntry("/FuelSim/LastShotOutcome", "string", "", t0Us);
 
       writer.appendDouble(eRint, t0Us, battery.estimatedRintMilliOhms());
       writer.appendString(eBattName, t0Us, battery.batteryName());
@@ -1296,6 +1329,31 @@ public final class RunAnalyzer {
         writer.appendDouble(eSupply, ts, pt.totalSupplyAmps());
         writer.appendDouble(eSpeed, ts, pt.chassisSpeedMps());
       }
+
+      // Run 50 Hz (20 ms) Odometry + Team 5000 FuelSim 3D environment replay across [t0Us .. windowEndUs]
+      fuelSimMetrics =
+          simulateAndWriteFuelSimTimeline(
+              writer,
+              outPath.getParent(),
+              runId,
+              t0Us,
+              windowEndUs,
+              alliance,
+              battery.batteryName(),
+              profile,
+              allLogs,
+              driveLog,
+              mechLog,
+              shots,
+              timeline,
+              eRobotPose,
+              eAkitPose,
+              eFuels,
+              eBlueScore,
+              eRedScore,
+              eIntaked,
+              eHopper,
+              eShotStatus);
 
       if (!voiceCorrelations.isEmpty()) {
         int eVoice = writer.startEntry("/VoiceNotes/CorrelatedDiagnosis", "string", "", t0Us);
@@ -1323,6 +1381,397 @@ public final class RunAnalyzer {
         copyLogSeries(writer, "/MechBus/", mechLog);
       }
     }
+    return fuelSimMetrics;
+  }
+
+  private static FuelSimMetrics simulateAndWriteFuelSimTimeline(
+      WpiLogWriter writer,
+      Path targetRunDir,
+      String runId,
+      long t0Us,
+      long windowEndUs,
+      String alliance,
+      String batteryName,
+      RobotProfile profile,
+      List<ParsedLog> allLogs,
+      ParsedLog driveLog,
+      ParsedLog mechLog,
+      List<ShotEvent> shots,
+      List<TimelinePoint> timeline,
+      int eRobotPose,
+      int eAkitPose,
+      int eFuels,
+      int eBlueScore,
+      int eRedScore,
+      int eIntaked,
+      int eHopper,
+      int eShotStatus)
+      throws IOException {
+    boolean isBlue = alliance == null || !alliance.toLowerCase(Locale.ROOT).startsWith("red");
+    double hubX = isBlue ? FuelSimEngine.BLUE_HUB_X : FuelSimEngine.RED_HUB_X;
+    double hubY = isBlue ? FuelSimEngine.BLUE_HUB_Y : FuelSimEngine.RED_HUB_Y;
+    // FUEL starts at HUB = (3.62, 4.21) for Blue or (12.92, 4.21) for Red (with slight station Y offset)
+    double startX = isBlue ? 3.55 : 12.99;
+    double startY =
+        alliance != null && alliance.contains("1")
+            ? 4.65
+            : (alliance != null && alliance.contains("3") ? 3.45 : 4.21);
+    double startHeadingDeg = isBlue ? 0.0 : 180.0;
+
+    // Check if native AdvantageKit Pose2d is present
+    List<DoubleSample> akitX =
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/RealOutputs/Odometry/Robot.x",
+                "RealOutputs/Odometry/Robot.x",
+                "/AdvantageKit/RealOutputs/Odometry/Robot.x",
+                "/Odometry/Robot.x"));
+    List<DoubleSample> akitY =
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/RealOutputs/Odometry/Robot.y",
+                "RealOutputs/Odometry/Robot.y",
+                "/AdvantageKit/RealOutputs/Odometry/Robot.y",
+                "/Odometry/Robot.y"));
+    List<DoubleSample> akitRot =
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/RealOutputs/Odometry/Robot.rotRad",
+                "RealOutputs/Odometry/Robot.rotRad",
+                "/AdvantageKit/RealOutputs/Odometry/Robot.rotRad",
+                "/Odometry/Robot.rotRad"));
+
+    int pigeonId = profile.pigeonId() > 0 ? profile.pigeonId() : 20;
+    List<DoubleSample> yawSeries =
+        findDoubleSeries(
+            allLogs, driveLog, List.of("Phoenix6/Pigeon2-" + pigeonId + "/Yaw", "/Drive/GyroYawDeg"));
+
+    List<List<DoubleSample>> drivePosSeries = new ArrayList<>();
+    List<List<DoubleSample>> steerPosSeries = new ArrayList<>();
+    for (RobotProfile.CornerConfig c : profile.corners().values()) {
+      drivePosSeries.add(
+          findDoubleSeries(
+              allLogs,
+              driveLog,
+              List.of(
+                  "Phoenix6/TalonFX-" + c.driveMotorId() + "/Position",
+                  c.driveVelocityTopic().replace("Velocity", "Position"))));
+      steerPosSeries.add(
+          findDoubleSeries(
+              allLogs,
+              driveLog,
+              List.of(
+                  "Phoenix6/TalonFX-" + c.steerMotorId() + "/Position",
+                  "Phoenix6/CANcoder-" + c.cancoderId() + "/AbsolutePosition")));
+    }
+
+    // Intake velocity + Shooter/Hood/Elevator/Arm series for 3D frame HUD & FK
+    List<DoubleSample> intakeVelSeries = Collections.emptyList();
+    List<DoubleSample> shooterVelSeries = Collections.emptyList();
+    List<DoubleSample> hoodPosSeries = Collections.emptyList();
+    List<DoubleSample> elevPosSeries =
+        findDoubleSeries(
+            allLogs,
+            mechLog,
+            List.of(
+                "/Elevator/PositionRot",
+                "Elevator/PositionRot",
+                "/Superstructure/ElevatorHeightMeters"));
+    List<DoubleSample> armPosSeries =
+        findDoubleSeries(
+            allLogs,
+            mechLog,
+            List.of("/ArmPivot/PositionRot", "ArmPivot/PositionRot", "/Superstructure/ArmAngleRad"));
+    for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
+      String lower = m.name().toLowerCase(Locale.ROOT);
+      if (lower.contains("intake") && intakeVelSeries.isEmpty()) {
+        intakeVelSeries = findDoubleSeriesByTopic(allLogs, mechLog, m.velocityTopic());
+      } else if (m.isShooter() && shooterVelSeries.isEmpty()) {
+        shooterVelSeries = findDoubleSeriesByTopic(allLogs, mechLog, m.velocityTopic());
+      } else if (lower.contains("hood") && hoodPosSeries.isEmpty()) {
+        hoodPosSeries = findDoubleSeriesByTopic(allLogs, mechLog, m.positionTopic());
+      } else if (lower.contains("elevator") && elevPosSeries.isEmpty()) {
+        elevPosSeries = findDoubleSeriesByTopic(allLogs, mechLog, m.positionTopic());
+      } else if (lower.contains("arm") && armPosSeries.isEmpty()) {
+        armPosSeries = findDoubleSeriesByTopic(allLogs, mechLog, m.positionTopic());
+      }
+    }
+
+    FuelSimEngine fuelSim = new FuelSimEngine();
+    fuelSim.spawnStartingFuel();
+
+    double x = startX;
+    double y = startY;
+    double yaw0 = sampleDoubleAt(yawSeries, t0Us, 0.0);
+    double couplingRatio = 4.5;
+    double metersPerRotorRot =
+        (2.0 * Math.PI * profile.wheelRadiusMeters()) / Math.max(1.0, profile.driveGearRatio());
+
+    double[] prevDrivePos = new double[drivePosSeries.size()];
+    double[] prevSteerPos = new double[steerPosSeries.size()];
+    for (int m = 0; m < drivePosSeries.size(); m++) {
+      prevDrivePos[m] = sampleDoubleAt(drivePosSeries.get(m), t0Us, 0.0);
+      prevSteerPos[m] = sampleDoubleAt(steerPosSeries.get(m), t0Us, 0.0);
+    }
+
+    long dtUs = 20_000L; // 50 Hz (20 ms) simulation step
+    double dtSec = 0.020;
+    long maxSpanUs = Math.min(Math.max(t0Us + dtUs, windowEndUs), t0Us + 200_000_000L);
+    int nextShotIdx = 0;
+    int prevOutcomesCount = 0;
+    int stepCounter = 0;
+    int tlIdx = 0;
+    String lastShotBanner = "";
+    List<Sim3DFrame> simFrames = new ArrayList<>();
+
+    for (long tsUs = t0Us; tsUs <= maxSpanUs; tsUs += dtUs) {
+      stepCounter++;
+      double relTimeSec = (tsUs - t0Us) / 1_000_000.0;
+      double prevX = x;
+      double prevY = y;
+      double headingRad;
+
+      if (!akitX.isEmpty() && !akitY.isEmpty() && !akitRot.isEmpty()) {
+        x = sampleDoubleAt(akitX, tsUs, x);
+        y = sampleDoubleAt(akitY, tsUs, y);
+        headingRad = sampleDoubleAt(akitRot, tsUs, Math.toRadians(startHeadingDeg));
+      } else {
+        double rawYawDeg = sampleDoubleAt(yawSeries, tsUs, yaw0);
+        double headingDeg = (rawYawDeg - yaw0) + startHeadingDeg;
+        headingRad = Math.toRadians(headingDeg);
+
+        if (!drivePosSeries.isEmpty()) {
+          double dxRob = 0.0;
+          double dyRob = 0.0;
+          int nMod = drivePosSeries.size();
+          for (int m = 0; m < nMod; m++) {
+            double curDrive = sampleDoubleAt(drivePosSeries.get(m), tsUs, prevDrivePos[m]);
+            double curSteer = sampleDoubleAt(steerPosSeries.get(m), tsUs, prevSteerPos[m]);
+            double dSteer = curSteer - prevSteerPos[m];
+            double dRotor = (curDrive - prevDrivePos[m]) - (dSteer * couplingRatio);
+            double dMeters = dRotor * metersPerRotorRot;
+            double modAngleRad = 2.0 * Math.PI * curSteer;
+            dxRob += dMeters * Math.cos(modAngleRad) / nMod;
+            dyRob += dMeters * Math.sin(modAngleRad) / nMod;
+            prevDrivePos[m] = curDrive;
+            prevSteerPos[m] = curSteer;
+          }
+          double dxField = dxRob * cos(headingRad) - dyRob * sin(headingRad);
+          double dyField = dxRob * sin(headingRad) + dyRob * cos(headingRad);
+          if (Math.hypot(dxField, dyField) < 0.35) {
+            x = Math.max(0.45, Math.min(FuelSimEngine.FIELD_LENGTH_M - 0.45, x + dxField));
+            y = Math.max(0.45, Math.min(FuelSimEngine.FIELD_WIDTH_M - 0.45, y + dyField));
+          }
+        }
+
+        // In dead-reckoned .hoot logs without camera vision, gently anchor robot position toward
+        // the expected RangeTable radius around the Alliance Hub as the robot lines up for a shot
+        if (nextShotIdx < shots.size()) {
+          ShotEvent upcoming = shots.get(nextShotIdx);
+          double timeToShot = upcoming.timestampSec() - relTimeSec;
+          if (timeToShot >= 0.0 && timeToShot <= 2.5) {
+            double expectedDist = FuelSimEngine.nominalDistanceForHood(upcoming.hoodPositionRot());
+            double dxFromHub = x - hubX;
+            double dyFromHub = y - hubY;
+            // Ensure approach stays on the alliance side of the Hub
+            if (isBlue && dxFromHub > -0.45) {
+              dxFromHub = -Math.max(0.85, Math.abs(dxFromHub));
+            } else if (!isBlue && dxFromHub < 0.45) {
+              dxFromHub = Math.max(0.85, Math.abs(dxFromHub));
+            }
+            double approachAngle = Math.atan2(dyFromHub, dxFromHub);
+            double targetX = hubX + expectedDist * Math.cos(approachAngle);
+            double targetY =
+                Math.max(
+                    0.75,
+                    Math.min(
+                        FuelSimEngine.FIELD_WIDTH_M - 0.75,
+                        hubY + expectedDist * Math.sin(approachAngle)));
+            double alpha = timeToShot <= 0.15 ? 0.38 : 0.08;
+            x = x + alpha * (targetX - x);
+            y = y + alpha * (targetY - y);
+          }
+        }
+      }
+
+      double vxField = (x - prevX) / dtSec;
+      double vyField = (y - prevY) / dtSec;
+      boolean intakeActive = Math.abs(sampleDoubleAt(intakeVelSeries, tsUs, 0.0)) > 15.0;
+
+      // Trigger Fuel launches when log reaches a detected ShotEvent
+      while (nextShotIdx < shots.size()
+          && relTimeSec >= shots.get(nextShotIdx).timestampSec()) {
+        ShotEvent sh = shots.get(nextShotIdx);
+        int ballsInBurst = Math.max(1, Math.min(4, (int) Math.round(sh.durationSec() / 0.40)));
+        for (int bIdx = 0; bIdx < ballsInBurst; bIdx++) {
+          fuelSim.launchFuelFromLog(
+              sh.shotNumber() * 10 + (bIdx + 1),
+              relTimeSec,
+              isBlue,
+              x,
+              y,
+              headingRad,
+              vxField + (bIdx * 0.06),
+              vyField,
+              sh.shooterLeftRps(),
+              sh.hoodPositionRot());
+        }
+        nextShotIdx++;
+      }
+
+      fuelSim.stepSimulation(dtSec, isBlue, x, y, headingRad, vxField, vyField, intakeActive);
+
+      writer.appendPose2d(eRobotPose, tsUs, x, y, headingRad);
+      writer.appendPose2d(eAkitPose, tsUs, x, y, headingRad);
+      writer.appendTranslation3dArray(eFuels, tsUs, fuelSim.getActiveFuelTranslations3d());
+      writer.appendInt64(eBlueScore, tsUs, fuelSim.getBlueHubScore());
+      writer.appendInt64(eRedScore, tsUs, fuelSim.getRedHubScore());
+      writer.appendInt64(eIntaked, tsUs, fuelSim.getIntakedCount());
+      writer.appendInt64(eHopper, tsUs, fuelSim.getHopperFuelCount());
+
+      List<FuelSimEngine.SimulatedShotOutcome> outcomes = fuelSim.getShotOutcomes();
+      while (prevOutcomesCount < outcomes.size()) {
+        FuelSimEngine.SimulatedShotOutcome o = outcomes.get(prevOutcomesCount++);
+        lastShotBanner =
+            String.format(
+                Locale.US,
+                "Ball #%d @ %.1fs (dist=%.2fm, v=%.1fm/s, pitch=%.1f°): %s (minHubDist=%.2fm, apex=%.2fm)",
+                o.shotNumber(),
+                o.launchTimeSec(),
+                o.targetDistanceM(),
+                o.launchSpeedMps(),
+                o.launchPitchDeg(),
+                o.scoredInHub() ? "SCORED IN HUB" : "MISSED / REBOUND",
+                o.closestHubDistM(),
+                o.apexHeightM());
+        writer.appendString(eShotStatus, tsUs, lastShotBanner);
+      }
+
+      // Record 3D frame every 80 ms (12.5 Hz) or every 40 ms (25 Hz) while a shot is airborne
+      double[] activeBalls = fuelSim.getActiveFuelTranslations3d();
+      boolean anyAirborne = false;
+      for (int bi = 2; bi < activeBalls.length; bi += 3) {
+        if (activeBalls[bi] > 0.14) {
+          anyAirborne = true;
+          break;
+        }
+      }
+      if ((stepCounter % 4 == 1) || (anyAirborne && stepCounter % 2 == 1)) {
+        while (tlIdx + 1 < timeline.size() && timeline.get(tlIdx + 1).timeSec() <= relTimeSec) {
+          tlIdx++;
+        }
+        TimelinePoint tp = !timeline.isEmpty() ? timeline.get(tlIdx) : null;
+        double vBatt = tp != null ? tp.batteryVoltage() : 12.4;
+        double dStator = tp != null ? tp.totalDriveStatorAmps() : 0.0;
+        double sRps = Math.abs(sampleDoubleAt(shooterVelSeries, tsUs, tp != null ? tp.shooterLeftRps() : 0.0));
+        double hRot = Math.abs(sampleDoubleAt(hoodPosSeries, tsUs, 0.0));
+        double elevRot = Math.max(0.0, sampleDoubleAt(elevPosSeries, tsUs, 0.0));
+        double elevM = elevRot > 2.0 ? Math.min(1.45, elevRot * 0.022) : Math.min(1.45, elevRot);
+        double armRot = sampleDoubleAt(armPosSeries, tsUs, 0.0);
+        double armRad = Math.abs(armRot) <= 1.5 ? armRot * 2.0 * Math.PI : Math.toRadians(armRot);
+        simFrames.add(
+            new Sim3DFrame(
+                relTimeSec,
+                x,
+                y,
+                headingRad,
+                vBatt,
+                dStator,
+                sRps,
+                hRot,
+                elevM,
+                armRad,
+                fuelSim.getBlueHubScore(),
+                fuelSim.getRedHubScore(),
+                fuelSim.getIntakedCount(),
+                lastShotBanner,
+                activeBalls));
+      }
+    }
+    fuelSim.finishSimulation();
+
+    // Render replay-3d.mp4 if ffmpeg is available
+    String videoFileName =
+        targetRunDir != null
+            ? FuelSimVideoRenderer.renderMp4IfAvailable(
+                targetRunDir, runId, profile.robotName(), alliance, batteryName, simFrames)
+            : null;
+
+    // Summarize FuelSim outcomes per ShotEvent and overall
+    List<FuelSimEngine.SimulatedShotOutcome> allOutcomes = fuelSim.getShotOutcomes();
+    int totalLaunched = allOutcomes.size();
+    int totalScored = 0;
+    for (FuelSimEngine.SimulatedShotOutcome o : allOutcomes) {
+      if (o.scoredInHub()) {
+        totalScored++;
+      }
+    }
+    List<ShotSimSummary> shotSummaries = new ArrayList<>();
+    for (ShotEvent sh : shots) {
+      int burstCount = 0;
+      int burstScored = 0;
+      double distM = FuelSimEngine.nominalDistanceForHood(sh.hoodPositionRot());
+      double speedMps = 0.0;
+      double pitchDeg = 65.0 - sh.hoodPositionRot() * 2.1;
+      double apexM = 0.0;
+      for (FuelSimEngine.SimulatedShotOutcome o : allOutcomes) {
+        if (o.shotNumber() / 10 == sh.shotNumber()) {
+          burstCount++;
+          if (o.scoredInHub()) {
+            burstScored++;
+          }
+          distM = o.targetDistanceM();
+          speedMps = o.launchSpeedMps();
+          pitchDeg = o.launchPitchDeg();
+          apexM = Math.max(apexM, o.apexHeightM());
+        }
+      }
+      String outcomeLabel =
+          burstCount == 0
+              ? "N/A"
+              : (burstScored == burstCount
+                  ? "SCORED (" + burstScored + "/" + burstCount + ")"
+                  : (burstScored > 0
+                      ? "PARTIAL (" + burstScored + "/" + burstCount + ")"
+                      : "MISSED / REBOUND (0/" + burstCount + ")"));
+      shotSummaries.add(
+          new ShotSimSummary(
+              sh.shotNumber(),
+              sh.timestampSec(),
+              burstCount,
+              burstScored,
+              distM,
+              speedMps,
+              pitchDeg,
+              apexM,
+              outcomeLabel));
+    }
+    double accuracyPct = totalLaunched > 0 ? (100.0 * totalScored) / totalLaunched : 0.0;
+    return new FuelSimMetrics(
+        totalLaunched,
+        totalScored,
+        totalLaunched - totalScored,
+        accuracyPct,
+        fuelSim.getIntakedCount(),
+        fuelSim.getBlueHubScore(),
+        fuelSim.getRedHubScore(),
+        videoFileName,
+        shotSummaries,
+        simFrames);
+  }
+
+  private static double cos(double rad) {
+    return Math.cos(rad);
+  }
+
+  private static double sin(double rad) {
+    return Math.sin(rad);
   }
 
   private static boolean hasAnyCornerTopicInLog(ParsedLog log, RobotProfile profile) {
