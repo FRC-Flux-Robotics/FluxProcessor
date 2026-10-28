@@ -108,34 +108,37 @@ public final class SystemHealthWatchAnalyzer {
     boolean isRoboRio = controllerType.toUpperCase(Locale.ROOT).contains("ROBORIO");
     double defaultPeriod = isRoboRio ? 20.0 : 5.0;
     double loopPeriodMs = parseDouble(kv.get("loopPeriodMs"), defaultPeriod);
-    double loopMedianMs = parseDouble(kv.get("loopMedianMs"), hasSnapshot ? 1.5 : 0.0);
-    double loopP99Ms = parseDouble(kv.get("loopP99Ms"), hasSnapshot ? 2.8 : 0.0);
+    double loopMedianMs = parseDouble(kv.get("loopMedianMs"), 0.0);
+    double loopP99Ms = parseDouble(kv.get("loopP99Ms"), 0.0);
     double loopMaxMs =
         parseDouble(
             kv.get("loopMaxMs"),
-            hasSnapshot ? 4.1 : Math.max(wpiDriveMaxMs + wpiVisionMaxMs + wpiSuperMaxMs, 0.0));
-    double firstEnablePeakMs = parseDouble(kv.get("firstEnablePeakMs"), hasSnapshot ? 3.9 : 0.0);
-    double odometryJitterMaxMs =
-        parseDouble(kv.get("odometryJitterMaxMs"), hasSnapshot ? 0.4 : 0.0);
+            Math.max(wpiDriveMaxMs + wpiVisionMaxMs + wpiSuperMaxMs, 0.0));
+    double firstEnablePeakMs = parseDouble(kv.get("firstEnablePeakMs"), 0.0);
+    double odometryJitterMaxMs = parseDouble(kv.get("odometryJitterMaxMs"), 0.0);
     double driveTraceMaxMs =
-        Math.max(wpiDriveMaxMs, parseDouble(kv.get("driveTraceMaxMs"), hasSnapshot ? 0.5 : 0.0));
+        Math.max(wpiDriveMaxMs, parseDouble(kv.get("driveTraceMaxMs"), 0.0));
     double visionTraceMaxMs =
-        Math.max(wpiVisionMaxMs, parseDouble(kv.get("visionTraceMaxMs"), hasSnapshot ? 0.6 : 0.0));
+        Math.max(wpiVisionMaxMs, parseDouble(kv.get("visionTraceMaxMs"), 0.0));
+    double superTraceMaxMs =
+        Math.max(wpiSuperMaxMs, parseDouble(kv.get("superstructureTraceMaxMs"), 0.0));
 
     double totalCpuPct = parseDouble(kv.get("totalCpuPct"), 0.0);
     double javaCpuPct = parseDouble(kv.get("javaProcessCpuPct"), 0.0);
     double visionCpuPct = parseDouble(kv.get("visionDaemonCpuPct"), 0.0);
     double softIrqPct = parseDouble(kv.get("softIrqPct"), 0.0);
-    double ioWaitPct = parseDouble(kv.get("ioWaitPct"), 0.0);
+    double ioWaitPct = parseDouble(kv.getOrDefault("ioWaitPct", kv.get("iowaitPct")), 0.0);
     double cpuTempC = Math.max(wpiCpuTempC, parseDouble(kv.get("cpuTempC"), 0.0));
     double cpuFreqMHz =
         parseDouble(kv.get("cpuFreqMHz"), hasSnapshot ? (isRoboRio ? 667.0 : 2400.0) : 0.0);
     int throttledFlags = parseHexOrInt(kv.get("throttledHex"), 0);
     double heapAllocMbPerSec = parseDouble(kv.get("heapAllocRateMbPerSec"), 0.0);
     int gcCorrelatedSpikes = (int) parseLong(kv.get("gcCorrelatedLoopSpikes"), 0L);
-    double freeStorageMb = parseDouble(kv.get("freeStorageMb"), hasSnapshot ? 1024.0 : 0.0);
+    boolean hasFreeStorageKey = kv.containsKey("freeStorageMb");
+    double freeStorageMb = parseDouble(kv.get("freeStorageMb"), 0.0);
     double logWriteMaxMs = parseDouble(kv.get("logWriteLatencyMaxMs"), 0.0);
     double ipc = parseDouble(kv.get("ipc"), 0.0);
+    double l1dMissPct = parseDouble(kv.get("l1dCacheMissPct"), 0.0);
     double llcMissPct = parseDouble(kv.get("llcMissPct"), 0.0);
     long involCtxSw = parseLong(kv.get("involuntaryContextSwitches"), 0L);
 
@@ -156,21 +159,28 @@ public final class SystemHealthWatchAnalyzer {
     }
 
     // 2. Subsystem Breakdown
-    if (visionTraceMaxMs > 2.5 || driveTraceMaxMs > 2.0) {
-      String culprit = visionTraceMaxMs >= driveTraceMaxMs ? "VisionMs" : "DriveMs";
-      double peak = Math.max(visionTraceMaxMs, driveTraceMaxMs);
+    if (visionTraceMaxMs > 2.5 || driveTraceMaxMs > 2.0 || superTraceMaxMs > 1.5) {
+      String culprit =
+          visionTraceMaxMs >= driveTraceMaxMs && visionTraceMaxMs >= superTraceMaxMs
+              ? "VisionMs"
+              : (driveTraceMaxMs >= superTraceMaxMs ? "DriveMs" : "SuperstructureMs");
+      double peak = Math.max(visionTraceMaxMs, Math.max(driveTraceMaxMs, superTraceMaxMs));
       decisions.add(
           new SystemWatchDecision(
               "Loop & Timing",
               "Subsystem Execution Spike (" + culprit + ")",
               String.format(
-                  Locale.US, "Drive=%.2f ms, Vision=%.2f ms", driveTraceMaxMs, visionTraceMaxMs),
-              "Drive <= 2.0 ms, Vision <= 2.5 ms",
+                  Locale.US,
+                  "Drive=%.2f ms, Vision=%.2f ms, Super=%.2f ms",
+                  driveTraceMaxMs,
+                  visionTraceMaxMs,
+                  superTraceMaxMs),
+              "Drive <= 2.0 ms, Vision <= 2.5 ms, Super <= 1.5 ms",
               peak > 4.0 ? "CRITICAL" : "WARN",
               culprit + " spiked in LoggedTracer.",
               "VisionMs".equals(culprit)
                   ? "Decision: Cap per-loop camera queue drain or tighten AprilTag distance/ambiguity filtering in Vision.periodic()."
-                  : "Decision: Move synchronous CTRE configurator .apply() calls out of Drive.periodic()."));
+                  : "Decision: Move synchronous CTRE configurator .apply() calls out of periodic()."));
     }
 
     // 3. First-Enable Cold JIT Spike
@@ -316,26 +326,38 @@ public final class SystemHealthWatchAnalyzer {
     }
 
     // 8. Storage & Hardware PMU (only evaluate when snapshot is present)
-    if (hasSnapshot && (freeStorageMb < 400.0 || ioWaitPct > 5.0 || logWriteMaxMs > 25.0)) {
+    if (hasSnapshot
+        && ((hasFreeStorageKey && freeStorageMb < 400.0)
+            || ioWaitPct > 5.0
+            || logWriteMaxMs > 25.0)) {
       decisions.add(
           new SystemWatchDecision(
               "Storage & eMMC I/O",
               "eMMC Free Space & Log I/O Wait",
               String.format(
-                  Locale.US, "Free=%.0f MB, iowait=%.1f%%", freeStorageMb, ioWaitPct),
-              "Free >= 400 MB, iowait <= 5.0%",
-              freeStorageMb < 150.0 ? "CRITICAL" : "WARN",
+                  Locale.US, "Free=%.0f MB, ioWait=%.1f%%", freeStorageMb, ioWaitPct),
+              "Free >= 400 MB, ioWait <= 5.0%",
+              (hasFreeStorageKey && freeStorageMb < 150.0) ? "CRITICAL" : "WARN",
               "eMMC storage pressure or disk write latency spikes detected.",
               "Decision: Switch camera recording to the Hybrid Event-Driven preset (~4.5 MB/match) and clean old logs."));
     }
-    if (hasSnapshot && ((ipc > 0.0 && ipc < 0.80) || llcMissPct > 15.0 || involCtxSw > 500L)) {
+    if (hasSnapshot
+        && ((ipc > 0.0 && ipc < 0.80)
+            || l1dMissPct > 8.0
+            || llcMissPct > 15.0
+            || involCtxSw > 500L)) {
       decisions.add(
           new SystemWatchDecision(
               "ARMv8 Hardware PMU",
               "Cortex-A76 IPC & L3 Cache Misses",
               String.format(
-                  Locale.US, "IPC=%.2f, LLC Miss=%.1f%%, CtxSw=%d", ipc, llcMissPct, involCtxSw),
-              "IPC >= 0.80, LLC Miss <= 15.0%",
+                  Locale.US,
+                  "IPC=%.2f, L1D Miss=%.1f%%, LLC Miss=%.1f%%, CtxSw=%d",
+                  ipc,
+                  l1dMissPct,
+                  llcMissPct,
+                  involCtxSw),
+              "IPC >= 0.80, L1D <= 8.0%, LLC <= 15.0%",
               "WARN",
               "4x OV9281 camera pipelines are thrashing the shared 2 MB L3 cache.",
               "Decision: Isolate Core 3 (isolcpus=3 / taskset) for Java + 250 Hz odometry and restrict limelightsc0..3 daemons to Cores 0-2."));

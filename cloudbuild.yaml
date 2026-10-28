@@ -19,7 +19,7 @@ steps:
           echo "Using committed /workspace/libs/fluxfig-1.0.0.jar"
         fi
 
-  - name: "eclipse-temurin:25-jdk"
+  - name: "eclipse-temurin:17-jdk-jammy"
     id: "compile-test-and-package-fluxprocessor"
     entrypoint: "bash"
     args:
