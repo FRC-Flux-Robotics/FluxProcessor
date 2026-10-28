@@ -130,6 +130,8 @@ public final class FluxMcpServer {
         case "tools/call" -> handleToolCall(idRaw, requestJson);
         default -> buildError(idRaw, -32601, "Method not found: " + method);
       };
+    } catch (IllegalArgumentException e) {
+      return buildError(idRaw, -32602, "Invalid params: " + e.getMessage());
     } catch (Exception e) {
       return buildError(idRaw, -32000, "Server error: " + e.getMessage());
     }
@@ -513,8 +515,28 @@ public final class FluxMcpServer {
   }
 
   private static String extractJsonId(String json) {
+    // Strip nested "params" block if it precedes top-level "id" so nested "id" fields aren't matched
+    int depth = 0;
+    boolean inString = false;
+    StringBuilder topLevel = new StringBuilder(json.length());
+    for (int i = 0; i < json.length(); i++) {
+      char c = json.charAt(i);
+      if (c == '"' && (i == 0 || json.charAt(i - 1) != '\\')) {
+        inString = !inString;
+      }
+      if (!inString) {
+        if (c == '{' || c == '[') {
+          depth++;
+        } else if (c == '}' || c == ']') {
+          depth--;
+        }
+      }
+      if (depth <= 1) {
+        topLevel.append(c);
+      }
+    }
     Pattern p = Pattern.compile("\"id\"\\s*:\\s*(\"[^\"]*\"|-?[0-9]+|null)");
-    Matcher m = p.matcher(json);
+    Matcher m = p.matcher(topLevel.toString());
     return m.find() ? m.group(1) : "1";
   }
 

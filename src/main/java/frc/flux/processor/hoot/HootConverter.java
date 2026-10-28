@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -111,7 +110,6 @@ public final class HootConverter {
       String baseName = fileName.substring(0, fileName.length() - 5);
       Path existingInRunDir = runDir.resolve(baseName + ".wpilog");
       Path outWpilog = targetOutDir.resolve(baseName + ".wpilog");
-      Path tmpCached = Paths.get("/tmp", baseName + ".wpilog");
 
       if (Files.exists(outWpilog) && Files.size(outWpilog) > 1000) {
         produced.add(outWpilog);
@@ -119,11 +117,6 @@ public final class HootConverter {
       }
       if (Files.exists(existingInRunDir) && Files.size(existingInRunDir) > 1000) {
         produced.add(existingInRunDir);
-        continue;
-      }
-      if (Files.exists(tmpCached) && Files.size(tmpCached) > 1000) {
-        Files.copy(tmpCached, outWpilog, StandardCopyOption.REPLACE_EXISTING);
-        produced.add(outWpilog);
         continue;
       }
       if (owlet == null) {

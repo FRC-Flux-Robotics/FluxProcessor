@@ -334,7 +334,8 @@ public final class AutoSimVideoRenderer {
             "-movflags",
             "+faststart",
             mp4File.toAbsolutePath().toString());
-    pb.redirectErrorStream(true);
+    pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+    pb.redirectError(ProcessBuilder.Redirect.DISCARD);
 
     try {
       Process proc = pb.start();
@@ -382,8 +383,9 @@ public final class AutoSimVideoRenderer {
         g.dispose();
       }
 
-      proc.getInputStream().transferTo(OutputStream.nullOutputStream());
-      proc.waitFor(60, TimeUnit.SECONDS);
+      if (!proc.waitFor(60, TimeUnit.SECONDS)) {
+        proc.destroyForcibly();
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     }
@@ -1433,7 +1435,7 @@ public final class AutoSimVideoRenderer {
             + "<head>\n"
             + "<meta charset=\"UTF-8\">\n"
             + "<title>FLUX 10413 — "
-            + escapeJson(routineName)
+            + escapeHtml(routineName)
             + "</title>\n"
             + "<style>\n"
             + "  body{margin:0;background:#0a0e17;color:#e2e8f0;font-family:system-ui,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden;}\n"
@@ -1449,9 +1451,9 @@ public final class AutoSimVideoRenderer {
             + "<body>\n"
             + "<header>\n"
             + "  <div><strong>FLUX 10413 • "
-            + escapeJson(routineName)
+            + escapeHtml(routineName)
             + "</strong> <span style=\"color:#94a3b8;margin-left:10px;\">("
-            + escapeJson(robotName)
+            + escapeHtml(robotName)
             + ")</span></div>\n"
             + "  <div id=\"stateBadge\" class=\"badge\">STATE: IDLE</div>\n"
             + "</header>\n"
@@ -1533,6 +1535,17 @@ public final class AutoSimVideoRenderer {
   }
 
   private static String escapeJson(String s) {
-    return (s == null) ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    return (s == null) ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"").replace("</", "<\\/");
+  }
+
+  private static String escapeHtml(String s) {
+    if (s == null) {
+      return "";
+    }
+    return s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;");
   }
 }

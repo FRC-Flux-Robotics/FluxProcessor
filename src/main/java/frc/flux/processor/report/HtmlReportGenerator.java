@@ -951,11 +951,11 @@ public final class HtmlReportGenerator {
           String.format(
               Locale.US,
               "%s,%s,%s,%s,%s,%.1f,%.2f,%.0f,%.2f,%d,%.1f,%.2f,%d,%s\n",
-              r.runId(),
-              r.robotName(),
-              r.matchType(),
-              r.allianceStation(),
-              b.batteryName(),
+              csvQuote(r.runId()),
+              csvQuote(r.robotName()),
+              csvQuote(r.matchType()),
+              csvQuote(r.allianceStation()),
+              csvQuote(b.batteryName()),
               b.estimatedRintMilliOhms(),
               b.minVoltage(),
               b.peakDriveStatorAmps(),
@@ -964,7 +964,7 @@ public final class HtmlReportGenerator {
               r.totalDistanceMeters(),
               r.peakSpeedMps(),
               r.shots().size(),
-              r.overallVerdict()));
+              csvQuote(r.overallVerdict())));
     }
     Files.writeString(outDir.resolve("runs-index.csv"), csv.toString(), StandardCharsets.UTF_8);
 
@@ -977,15 +977,15 @@ public final class HtmlReportGenerator {
       bcsv.append(
           String.format(
               Locale.US,
-              "%s,%s,%.2f,%.2f,%.1f,%.0f,%d,\"%s\"\n",
-              b.batteryName(),
-              r.runId(),
+              "%s,%s,%.2f,%.2f,%.1f,%.0f,%d,%s\n",
+              csvQuote(b.batteryName()),
+              csvQuote(r.runId()),
               b.restingVoltage(),
               b.minVoltage(),
               b.estimatedRintMilliOhms(),
               b.peakSupplyCurrentAmps(),
               b.enableDropouts(),
-              b.healthGrade()));
+              csvQuote(b.healthGrade())));
     }
     Files.writeString(
         outDir.resolve("batteries-health.csv"), bcsv.toString(), StandardCharsets.UTF_8);
@@ -1122,7 +1122,18 @@ public final class HtmlReportGenerator {
     }
     return s.replace("\\", "\\\\")
         .replace("\"", "\\\"")
+        .replace("</", "<\\/")
         .replace("\n", " ")
         .replace("\r", "");
+  }
+
+  private static String csvQuote(String s) {
+    if (s == null) {
+      return "";
+    }
+    if (s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r")) {
+      return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
+    return s;
   }
 }

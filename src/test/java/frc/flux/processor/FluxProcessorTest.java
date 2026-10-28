@@ -10,10 +10,14 @@ import frc.flux.processor.report.HtmlReportGenerator;
 import frc.flux.processor.wpilog.WpiLogReader;
 import frc.flux.processor.wpilog.WpiLogWriter;
 import frc.lib.fluxfig.FluxFig;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
  * Self-contained verification tests for {@code FluxProcessor} v2.0:
@@ -36,22 +40,53 @@ import java.util.List;
  */
 public final class FluxProcessorTest {
 
+  private static final List<Path> TEMP_DIRS = new ArrayList<>();
+
+  private static Path createTempDir(String prefix) throws IOException {
+    Path dir = Files.createTempDirectory(prefix);
+    TEMP_DIRS.add(dir);
+    return dir;
+  }
+
+  private static void cleanupTempDirs() {
+    for (Path root : TEMP_DIRS) {
+      if (!Files.exists(root)) {
+        continue;
+      }
+      try (Stream<Path> walk = Files.walk(root)) {
+        walk.sorted(Comparator.reverseOrder())
+            .forEach(
+                p -> {
+                  try {
+                    Files.deleteIfExists(p);
+                  } catch (IOException ignored) {
+                  }
+                });
+      } catch (IOException ignored) {
+      }
+    }
+  }
+
   public static void main(String[] args) throws Exception {
-    testWpiLogReadWriteRoundTrip();
-    testEndToEndSyntheticRunWithVoiceAndVideo();
-    testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery();
-    testOtherTeamCustomJsonProfileAndCustomPhoenix6Ids();
-    testOfflineSystemCoreWatchMetricsAndReportCard();
-    testFluxFigSnapshotAndFluxTrayRunMetaContract();
-    testShopStressGateElevatorCyclesAndWpilogOnlyWatchGuard();
-    testDigitalTwinCalibratorCsvWriteBack();
-    testMcpServerMultimodalTools();
-    testStudentAutoVideoRendererCli();
-    System.out.println("ALL FLUX PROCESSOR TESTS PASSED (10/10)");
+    try {
+      testWpiLogReadWriteRoundTrip();
+      testEndToEndSyntheticRunWithVoiceAndVideo();
+      testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery();
+      testOtherTeamCustomJsonProfileAndCustomPhoenix6Ids();
+      testOfflineSystemCoreWatchMetricsAndReportCard();
+      testFluxFigSnapshotAndFluxTrayRunMetaContract();
+      testShopStressGateElevatorCyclesAndWpilogOnlyWatchGuard();
+      testDigitalTwinCalibratorCsvWriteBack();
+      testMcpServerMultimodalTools();
+      testStudentAutoVideoRendererCli();
+      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (10/10)");
+    } finally {
+      cleanupTempDirs();
+    }
   }
 
   public static void testWpiLogReadWriteRoundTrip() throws Exception {
-    Path tmpDir = Files.createTempDirectory("flux-wpilog-test");
+    Path tmpDir = createTempDir("flux-wpilog-test");
     Path logFile = tmpDir.resolve("test_rio.wpilog");
     try (WpiLogWriter w = new WpiLogWriter(logFile, "TestHeader")) {
       int eEnable = w.startEntry("RobotEnable", "boolean", "", 1_000_000L);
@@ -74,7 +109,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testEndToEndSyntheticRunWithVoiceAndVideo() throws Exception {
-    Path runDir = Files.createTempDirectory("flux-run-test");
+    Path runDir = createTempDir("flux-run-test");
 
     // 1. Write .meta.json with Named Battery "Thor" and YouTube URL
     Files.writeString(
@@ -199,7 +234,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery() throws Exception {
-    Path runDir = Files.createTempDirectory("other-team-akit-test");
+    Path runDir = createTempDir("other-team-akit-test");
     try (WpiLogWriter akit =
         new WpiLogWriter(runDir.resolve("akit_match.wpilog"), "AdvantageKit")) {
       int eRobot = akit.startEntry("/AdvantageKit/Robot", "string", "", 0L);
@@ -260,7 +295,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testOtherTeamCustomJsonProfileAndCustomPhoenix6Ids() throws Exception {
-    Path runDir = Files.createTempDirectory("other-team-json-test");
+    Path runDir = createTempDir("other-team-json-test");
     Files.writeString(
         runDir.resolve("robot-profile.json"),
         """
@@ -331,7 +366,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testOfflineSystemCoreWatchMetricsAndReportCard() throws Exception {
-    Path runDir = Files.createTempDirectory("systemcore-watch-test");
+    Path runDir = createTempDir("systemcore-watch-test");
     Files.writeString(
         runDir.resolve("system-snapshot.txt"),
         """
@@ -408,7 +443,7 @@ public final class FluxProcessorTest {
     FluxFig fig = FluxFig.load(cfgDir, "COMP_2027");
     String snapshot = fig.getEffectiveSnapshot();
 
-    Path runDir = Files.createTempDirectory("fluxfig-snapshot-test");
+    Path runDir = createTempDir("fluxfig-snapshot-test");
     // Write FluxTray's exact run-meta.json format with spaces in batteryName and JSON voiceNotes array
     Files.writeString(
         runDir.resolve("run-meta.json"),
@@ -476,7 +511,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testShopStressGateElevatorCyclesAndWpilogOnlyWatchGuard() throws Exception {
-    Path runDir = Files.createTempDirectory("shop-stress-gate-test");
+    Path runDir = createTempDir("shop-stress-gate-test");
     Path snapDir = runDir.resolve("cam-snapshots");
     Files.createDirectories(snapDir);
     Files.writeString(
@@ -528,7 +563,7 @@ public final class FluxProcessorTest {
 
   public static void testDigitalTwinCalibratorCsvWriteBack() throws Exception {
     Path cfgDir = createSampleFluxFigDirectory();
-    Path runDir = Files.createTempDirectory("sim-cal-run");
+    Path runDir = createTempDir("sim-cal-run");
 
     Files.writeString(
         runDir.resolve("run-meta.json"),
@@ -606,7 +641,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testMcpServerMultimodalTools() throws Exception {
-    Path wsDir = Files.createTempDirectory("flux-mcp-test");
+    Path wsDir = createTempDir("flux-mcp-test");
     Path runA = wsDir.resolve("run_A");
     Path runB = wsDir.resolve("run_B");
     Files.createDirectories(runA.resolve("cam-snapshots"));
@@ -703,7 +738,7 @@ public final class FluxProcessorTest {
   }
 
   public static void testStudentAutoVideoRendererCli() throws Exception {
-    Path autoDir = Files.createTempDirectory("flux-auto-render-test");
+    Path autoDir = createTempDir("flux-auto-render-test");
     Path jsonFile = autoDir.resolve("student-auto-frames.json");
 
     List<AutoSimVideoRenderer.AutoFrame> frames =
@@ -742,7 +777,7 @@ public final class FluxProcessorTest {
   }
 
   private static Path createSampleFluxFigDirectory() throws Exception {
-    Path dir = Files.createTempDirectory("sample-fluxfig");
+    Path dir = createTempDir("sample-fluxfig");
     Files.writeString(
         dir.resolve("parameters.csv"),
         """

@@ -1263,11 +1263,12 @@ public final class RunAnalyzer {
   }
 
   public static String extractJsonString(String json, String key, String fallback) {
-    // 1. Match quoted string (preserving spaces inside the string)
-    Pattern quoted = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"([^\"]*)\"");
+    // 1. Match quoted string (preserving spaces and escaped quotes inside the string)
+    Pattern quoted =
+        Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"");
     Matcher qm = quoted.matcher(json);
     if (qm.find()) {
-      return qm.group(1).trim();
+      return qm.group(1).replace("\\\"", "\"").replace("\\\\", "\\").trim();
     }
     // 2. Match unquoted number/boolean primitive
     Pattern unquoted = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*([^,}\\s\\]]+)");

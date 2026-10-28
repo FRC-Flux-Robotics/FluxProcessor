@@ -46,9 +46,13 @@ public final class FuelSimVideoRenderer {
     try {
       Process p =
           new ProcessBuilder("ffmpeg", "-version")
-              .redirectErrorStream(true)
+              .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+              .redirectError(ProcessBuilder.Redirect.DISCARD)
               .start();
       boolean finished = p.waitFor(3, TimeUnit.SECONDS);
+      if (!finished) {
+        p.destroyForcibly();
+      }
       boolean ok = finished && p.exitValue() == 0;
       ffmpegAvailable = ok;
       return ok;
@@ -117,7 +121,8 @@ public final class FuelSimVideoRenderer {
             "-movflags",
             "+faststart",
             outMp4.toAbsolutePath().toString());
-    pb.redirectErrorStream(true);
+    pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+    pb.redirectError(ProcessBuilder.Redirect.DISCARD);
 
     try {
       Process proc = pb.start();
@@ -150,6 +155,9 @@ public final class FuelSimVideoRenderer {
       }
 
       boolean done = proc.waitFor(30, TimeUnit.SECONDS);
+      if (!done) {
+        proc.destroyForcibly();
+      }
       if (done && proc.exitValue() == 0 && Files.exists(outMp4) && Files.size(outMp4) > 1000) {
         return outMp4.getFileName().toString();
       }
@@ -597,11 +605,11 @@ public final class FuelSimVideoRenderer {
         return false;
       }
 
-      String[] pythonCandidates = {
-        "/usr/local/google/home/tvaroska/ideas/waveshare-epaper-stand/.venv/bin/python",
-        "python3",
-        "python"
-      };
+      String envPython = System.getenv("FLUX_PYTHON");
+      String[] pythonCandidates =
+          (envPython != null && !envPython.isBlank())
+              ? new String[] {envPython.trim(), "python3", "python"}
+              : new String[] {"python3", "python"};
       String selectedPython = null;
       for (String candidate : pythonCandidates) {
         if (candidate.startsWith("/") && !Files.isExecutable(Path.of(candidate))) {
@@ -610,9 +618,14 @@ public final class FuelSimVideoRenderer {
         try {
           Process check =
               new ProcessBuilder(candidate, "-c", "import mujoco, PIL")
-                  .redirectErrorStream(true)
+                  .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                  .redirectError(ProcessBuilder.Redirect.DISCARD)
                   .start();
-          if (check.waitFor(4, TimeUnit.SECONDS) && check.exitValue() == 0) {
+          boolean checkDone = check.waitFor(4, TimeUnit.SECONDS);
+          if (!checkDone) {
+            check.destroyForcibly();
+          }
+          if (checkDone && check.exitValue() == 0) {
             selectedPython = candidate;
             break;
           }
@@ -632,10 +645,13 @@ public final class FuelSimVideoRenderer {
               outMp4.toAbsolutePath().toString(),
               meshDir.toAbsolutePath().toString());
       pb.environment().put("MUJOCO_GL", "egl");
-      pb.redirectErrorStream(true);
+      pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+      pb.redirectError(ProcessBuilder.Redirect.DISCARD);
       Process proc = pb.start();
-      proc.getInputStream().transferTo(OutputStream.nullOutputStream());
       boolean finished = proc.waitFor(180, TimeUnit.SECONDS);
+      if (!finished) {
+        proc.destroyForcibly();
+      }
       return finished && proc.exitValue() == 0 && Files.exists(outMp4) && Files.size(outMp4) > 2000;
     } catch (Exception e) {
       return false;
