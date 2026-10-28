@@ -111,14 +111,18 @@ public final class FluxProcessorTest {
   public static void testEndToEndSyntheticRunWithVoiceAndVideo() throws Exception {
     Path runDir = createTempDir("flux-run-test");
 
-    // 1. Write .meta.json with Named Battery "Thor" and YouTube URL
+    // 1. Write canonical run-meta.json with Named Battery "Thor" and YouTube URL
     Files.writeString(
-        runDir.resolve("run.meta.json"),
+        runDir.resolve("run-meta.json"),
         """
         {
-          "namedBattery": "Thor",
+          "robotId": "FUEL",
+          "profile": "FUEL",
+          "batteryName": "Thor",
           "gitSha": "abc1234",
-          "configSha": "cfg9876",
+          "configSha256": "cfg9876",
+          "loopPeriodMs": 20,
+          "bootTimestampIso": "2026-04-17T14:22:00Z",
           "videoUrl": "https://youtu.be/dQw4w9WgXcQ",
           "videoOffsetSec": 12.0
         }
@@ -444,15 +448,19 @@ public final class FluxProcessorTest {
     String snapshot = fig.getEffectiveSnapshot();
 
     Path runDir = createTempDir("fluxfig-snapshot-test");
-    // Write FluxTray's exact run-meta.json format with spaces in batteryName and JSON voiceNotes array
+    // Write unified robot/FluxTray run-meta.json format with spaces in batteryName and JSON voiceNotes array
     Files.writeString(
         runDir.resolve("run-meta.json"),
         """
         {
           "runId": "run_2027_q1",
+          "robotId": "COMP_2027",
+          "profile": "COMP_2027",
           "batteryName": "2027-B04 (Alpha Pack)",
           "gitSha": "9f8e7d6",
           "configSha256": "deadbeef1234",
+          "loopPeriodMs": 5,
+          "bootTimestampIso": "2027-02-18T16:08:00Z",
           "voiceNotes": [
             { "role": "DRIVER", "timeSec": 4.2, "text": "Elevator L4 extension felt super smooth" }
           ]

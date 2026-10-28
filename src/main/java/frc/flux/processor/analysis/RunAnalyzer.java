@@ -1151,18 +1151,19 @@ public final class RunAnalyzer {
       }
       if (!metaFiles.isEmpty()) {
         String json = Files.readString(metaFiles.get(0), StandardCharsets.UTF_8);
-        // Support both "batteryName" (FluxTray) and "namedBattery"
-        String namedBatt = extractJsonString(json, "namedBattery", "");
+        // Primary canonical keys ("batteryName", "configSha256") shared by LogFileManager and
+        // FluxTray, with backward-compatible fallbacks ("namedBattery", "configSha").
         String battName = extractJsonString(json, "batteryName", "");
-        if (!namedBatt.isBlank() && !"UNSET".equalsIgnoreCase(namedBatt)) {
-          battery = namedBatt;
-        } else if (!battName.isBlank() && !"UNSET".equalsIgnoreCase(battName)) {
+        String namedBatt = extractJsonString(json, "namedBattery", "");
+        if (!battName.isBlank() && !"UNSET".equalsIgnoreCase(battName)) {
           battery = battName;
+        } else if (!namedBatt.isBlank() && !"UNSET".equalsIgnoreCase(namedBatt)) {
+          battery = namedBatt;
         }
         gitSha = extractJsonString(json, "gitSha", gitSha);
         configSha =
             extractJsonString(
-                json, "configSha", extractJsonString(json, "configSha256", configSha));
+                json, "configSha256", extractJsonString(json, "configSha", configSha));
         videoUrl = extractJsonString(json, "videoUrl", videoUrl);
         String offsetStr = extractJsonString(json, "videoOffsetSec", "0");
         try {
