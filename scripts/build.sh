@@ -18,7 +18,7 @@ javac --release 17 -encoding UTF-8 -Xlint:all,-serial -Werror -cp libs/fluxfig-1
 javac --release 17 -encoding UTF-8 -Xlint:all,-serial -Werror -cp build/classes/main:libs/fluxfig-1.0.0.jar -d build/classes/test $(find src/test/java -name "*.java" | sort)
 
 echo "[2/3] Running FluxProcessor unit & integration tests..."
-java -ea -cp build/classes/main:build/classes/test:libs/fluxfig-1.0.0.jar frc.flux.processor.FluxProcessorTest
+java -ea -Djava.awt.headless=true -cp build/classes/main:build/classes/test:libs/fluxfig-1.0.0.jar frc.flux.processor.FluxProcessorTest
 
 echo "[3/3] Packaging self-contained executable build/libs/flux-processor.jar & dist/flux-processor.jar..."
 (
