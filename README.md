@@ -2,7 +2,7 @@
 
 Automated post-match and post-practice `.wpilog`/`.hoot`, multi-headset voice (`Driver` / `Operator` / `Coach`), on-robot camera snapshot (`cam-snapshots/*.jpg`), match video (`YouTube` / local `.mp4`), Digital-Twin simulation auto-calibration (`--calibrate-sim`), and JSON-RPC 2.0 Model Context Protocol (`--mcp`) analyzer for **FRC Team 10413 (FLUX Robotics)**.
 
-Built on **Java 25** (`--release 25`) with bundled **`FluxFig`** (`libs/fluxfig-1.0.0.jar`) and zero external Maven runtime dependencies. Works **out of the box with zero modifications to existing robot code** (`New_Robot/`, `Flux-SystemCore-2027/`, `Flux-RoboRIO-2027/`).
+Built on **Java 17+ compatible bytecode** (`--release 17`, running seamlessly on both WPILib 2026 JDK 17 and WPILib 2027 JDK 25) with bundled **`FluxFig`** (`libs/fluxfig-1.0.0.jar`) and zero external Maven runtime dependencies. Works **out of the box with zero modifications to existing robot code** (`New_Robot/`, `Flux-SystemCore-2027/`, `Flux-RoboRIO-2027/`).
 
 ---
 
@@ -39,21 +39,15 @@ Built on **Java 25** (`--release 25`) with bundled **`FluxFig`** (`libs/fluxfig-
 
 ## Quick Start
 
-### Windows (Double-Click, Drag-and-Drop, or PowerShell)
-No external install is needed if **WPILib 2027** (`C:\Users\Public\wpilib\2027\jdk`) or **Java 25** is on the laptop, and a ready-to-run fat-jar [`dist/flux-processor.jar`](dist/flux-processor.jar) (bundling `FluxFig`) is included in the repository:
-1. **Double-Click [`run.bat`](run.bat):** Opens a native Windows folder-picker dialog, analyzes the selected match-logs folder, and automatically opens `runs-index.html` in your browser.
-2. **Drag-and-Drop onto [`run.bat`](run.bat):** Drag any match-logs folder **or** any `match-logs_*.zip` file produced by `pull-logs.bat` directly onto `run.bat` in Windows Explorer.
-3. **PowerShell / Command Prompt:**
-   ```bat
-   run.bat C:\Users\Public\Desktop\match-logs --out .\output
+### Execution (`dist/flux-processor.jar`)
+No external install is needed if **WPILib 2026/2027** (`C:\Users\Public\wpilib\202*\jdk`) or **Java 17+** is on the laptop, and a ready-to-run fat-jar [`dist/flux-processor.jar`](dist/flux-processor.jar) (bundling `FluxFig`) is included in the repository:
+1. **Pull & Package Robot Logs via `FluxTray.jar`:** Running `java -jar dist/FluxTray.jar` on the Driver Station laptop automatically downloads `.wpilog`, `.hoot`, `driver-audio.ogg`, `.dslog`/`.dsevents`, and `system-snapshot.txt` and packages both `FLUX-10413-Hub/04_Practice_And_Match_Logs/<runId>/` and `FLUX-10413-Hub/04_Practice_And_Match_Logs/match-logs_<yyyy-MM-dd>_<HHmmss>_<ROBOT>.zip` by default (customizable via `--dir`, `--file`, or `--out`).
+2. **Analyze Any Run Folder or `.zip` Archive Directly:**
+   ```bash
+   ./scripts/build.sh
+   java -jar dist/flux-processor.jar <path/to/match-logs-dir-or-zip> --out ./output
    ```
    *(Or to recompile and run all unit tests on Windows: `scripts\build.bat`)*
-
-### Linux / macOS
-```bash
-./scripts/build.sh
-java -jar dist/flux-processor.jar <path/to/match-logs> --out ./output
-```
 
 ### 3D Student Autonomous Video & Interactive HTML Renderer (`--render-auto`)
 Consumes `student-auto-frames.json` produced by JUnit simulation tests (`StudentAutoSimExporter` in `Flux-SystemCore-2027` or `Flux-RoboRIO-2027`) and renders `student-auto.mp4` and `student-auto.html` (supporting both `EMPTY_FIELD_2027` and `REBUILT_2026_SHOOTING`):

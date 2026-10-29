@@ -9,15 +9,20 @@ import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.report.AutoSimVideoRenderer;
 import frc.flux.processor.report.HtmlReportGenerator;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 /**
  * CLI &amp; MCP server entry point for {@code FluxProcessor} v2.0.
@@ -134,6 +139,13 @@ public final class FluxProcessorMain {
       return;
     }
 
+    if (renderAutoJson == null
+        && inputDir != null
+        && Files.isRegularFile(inputDir)
+        && inputDir.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".json")) {
+      renderAutoJson = inputDir;
+    }
+
     if (renderAutoJson != null) {
       if (Files.isDirectory(renderAutoJson)) {
         renderAutoJson = renderAutoJson.resolve("student-auto-frames.json");
@@ -162,6 +174,16 @@ public final class FluxProcessorMain {
     if (inputDir == null || !Files.exists(inputDir)) {
       System.err.println("Error: Input path does not exist: " + inputDir);
       System.exit(1);
+    }
+
+    if (Files.isRegularFile(inputDir)
+        && inputDir.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".zip")) {
+      String zipFileName = inputDir.getFileName().toString();
+      String baseName = zipFileName.substring(0, zipFileName.length() - 4) + "_extracted";
+      Path extractedDir =
+          (inputDir.getParent() != null ? inputDir.getParent() : Paths.get(".")).resolve(baseName);
+      extractZipArchive(inputDir, extractedDir);
+      inputDir = extractedDir;
     }
 
     if (outputDir == null) {
@@ -284,14 +306,38 @@ public final class FluxProcessorMain {
     }
   }
 
+  private static void extractZipArchive(Path zipFile, Path targetDir) throws IOException {
+    Files.createDirectories(targetDir);
+    Path normalizedRoot = targetDir.toAbsolutePath().normalize();
+    try (InputStream fis = Files.newInputStream(zipFile);
+        ZipInputStream zis = new ZipInputStream(fis, StandardCharsets.UTF_8)) {
+      ZipEntry entry;
+      while ((entry = zis.getNextEntry()) != null) {
+        Path outPath = normalizedRoot.resolve(entry.getName()).normalize();
+        if (!outPath.startsWith(normalizedRoot)) {
+          throw new IOException("Blocked zip-slip entry outside target directory: " + entry.getName());
+        }
+        if (entry.isDirectory()) {
+          Files.createDirectories(outPath);
+        } else {
+          if (outPath.getParent() != null) {
+            Files.createDirectories(outPath.getParent());
+          }
+          Files.copy(zis, outPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+        zis.closeEntry();
+      }
+    }
+  }
+
   private static void printUsage() {
     System.out.println(
         """
         FluxProcessor v2.0 — FRC Team 10413 (FLUX Robotics) Automated Log, Voice, Video, Digital-Twin & MCP Analyzer
         Usage:
-          java -jar flux-processor.jar <input-dir> [options]
-          java -jar flux-processor.jar --render-auto <student-auto-frames.json> [--out <output-dir>]
-          java -jar flux-processor.jar --mcp [<input-dir>] [--robot AUTO|COMP_2027|FUEL|CORAL|<NAME>]
+          java -jar dist/flux-processor.jar <input-dir-or-zip> [options]
+          java -jar dist/flux-processor.jar --render-auto <student-auto-frames.json> [--out <output-dir>]
+          java -jar dist/flux-processor.jar --mcp [<input-dir>] [--robot AUTO|COMP_2027|FUEL|CORAL|<NAME>]
 
         Options:
           --out, -o <dir>              Output directory for reports and merged.wpilog (default: <input-dir>)
