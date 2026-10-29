@@ -101,7 +101,6 @@ public final class HtmlReportGenerator {
         .append("  <script src=\"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js\"></script>\n")
         .append("</head>\n<body>\n<div class=\"container\">\n");
 
-    // Header
     sb.append("  <div class=\"header\">\n")
         .append("    <div class=\"header-left\">\n")
         .append("      <img class=\"logo\" src=\"").append(LOGO_URL).append("\" alt=\"FLUX Robotics\">\n")
@@ -131,7 +130,6 @@ public final class HtmlReportGenerator {
         .append("</div>\n")
         .append("  </div>\n");
 
-    // Key Alerts Banner
     sb.append("  <div class=\"alerts\">\n")
         .append("    <h3>Key Audit Findings</h3>\n")
         .append("    <ul>\n");
@@ -140,7 +138,6 @@ public final class HtmlReportGenerator {
     }
     sb.append("    </ul>\n  </div>\n");
 
-    // KPI Cards
     int totalCycles = r.shots().size() + (r.elevatorCycles() != null ? r.elevatorCycles().size() : 0);
     String cyclesLabel =
         (r.elevatorCycles() != null && !r.elevatorCycles().isEmpty() && r.shots().isEmpty())
@@ -941,7 +938,6 @@ public final class HtmlReportGenerator {
       throws IOException {
     Files.createDirectories(outDir);
 
-    // 1. runs-index.csv
     StringBuilder csv = new StringBuilder();
     csv.append(
         "RunId,Robot,MatchType,Alliance,NamedBattery,EstRintMilliOhms,MinVoltageV,PeakDriveStatorA,BrownoutCritSec,EnableDropouts,DistanceM,PeakSpeedMps,ShotsCount,OverallVerdict\n");
@@ -968,7 +964,6 @@ public final class HtmlReportGenerator {
     }
     Files.writeString(outDir.resolve("runs-index.csv"), csv.toString(), StandardCharsets.UTF_8);
 
-    // 2. batteries-health.csv
     StringBuilder bcsv = new StringBuilder();
     bcsv.append(
         "NamedBattery,RunId,RestingVoltageV,MinVoltageUnderLoadV,EstimatedRintMilliOhms,PeakSupplyAmps,EnableDropouts,HealthGrade\n");
@@ -990,7 +985,6 @@ public final class HtmlReportGenerator {
     Files.writeString(
         outDir.resolve("batteries-health.csv"), bcsv.toString(), StandardCharsets.UTF_8);
 
-    // 3. runs-index.html
     StringBuilder html = new StringBuilder(16384);
     html.append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
         .append("  <meta charset=\"UTF-8\">\n")

@@ -220,20 +220,17 @@ public final class FuelSimVideoRenderer {
       String batteryName,
       Sim3DFrame f,
       List<double[]> airborneTrail) {
-    // 1. Arena Background
     g.setColor(new Color(17, 19, 24));
     g.fillRect(0, 0, WIDTH, HEIGHT);
 
     double L = FuelSimEngine.FIELD_LENGTH_M;
     double W = FuelSimEngine.FIELD_WIDTH_M;
 
-    // 2. Field Carpet & Alliance Zones
     fillQuad3D(g, 0, 0, 0, 4.62, 0, 0, 4.62, W, 0, 0, W, 0, new Color(28, 48, 92)); // Blue Zone
     fillQuad3D(
         g, 4.62, 0, 0, 11.92, 0, 0, 11.92, W, 0, 4.62, W, 0, new Color(32, 36, 44)); // Neutral
     fillQuad3D(g, 11.92, 0, 0, L, 0, 0, L, W, 0, 11.92, W, 0, new Color(88, 30, 36)); // Red Zone
 
-    // Field grid lines
     g.setStroke(new BasicStroke(1.0f));
     g.setColor(new Color(255, 255, 255, 32));
     for (double x = 2.0; x < L; x += 2.0) {
@@ -242,7 +239,6 @@ public final class FuelSimVideoRenderer {
     for (double y = 2.0; y < W; y += 2.0) {
       drawLine3D(g, 0, y, 0, L, y, 0);
     }
-    // Centerline
     g.setStroke(new BasicStroke(2.0f));
     g.setColor(new Color(255, 255, 255, 85));
     drawLine3D(g, L * 0.5, 0, 0, L * 0.5, W, 0);
@@ -257,13 +253,13 @@ public final class FuelSimVideoRenderer {
     drawLine3D(g, 0, 0, 0.25, L, 0, 0.25);
     drawLine3D(g, 0, W, 0.25, L, W, 0.25);
 
-    // 3. Trench Pillars
+    // Trench Pillars
     drawBox3D(g, 4.62, 0.65, 0, 0.35, 0.40, 0.89, new Color(59, 130, 246, 130));
     drawBox3D(g, 4.62, 7.42, 0, 0.35, 0.40, 0.89, new Color(59, 130, 246, 130));
     drawBox3D(g, 11.92, 0.65, 0, 0.35, 0.40, 0.89, new Color(239, 68, 68, 130));
     drawBox3D(g, 11.92, 7.42, 0, 0.35, 0.40, 0.89, new Color(239, 68, 68, 130));
 
-    // 4. Blue & Red Octagonal Hubs (z = 0..1.65m funnel + z = 1.65..2.8m net)
+    // Blue & Red Octagonal Hubs (z = 0..1.65m funnel + z = 1.65..2.8m net)
     drawHub3D(
         g,
         FuelSimEngine.BLUE_HUB_X,
@@ -277,7 +273,6 @@ public final class FuelSimVideoRenderer {
         new Color(220, 38, 38),
         new Color(248, 113, 113));
 
-    // 5. Airborne Shot Trail
     if (airborneTrail.size() >= 2) {
       g.setStroke(new BasicStroke(2.5f));
       for (int i = 1; i < airborneTrail.size(); i++) {
@@ -291,10 +286,8 @@ public final class FuelSimVideoRenderer {
       }
     }
 
-    // 6. 3D Robot Chassis + Superstructure (Elevator/Arm or Shooter Vector)
     drawRobot3D(g, f, isBlue);
 
-    // 7. 3D Fuel Balls (Shadow on carpet + 3D Sphere at height z)
     double[] balls = f.ballXyz();
     if (balls != null) {
       for (int i = 0; i + 2 < balls.length; i += 3) {
@@ -314,7 +307,6 @@ public final class FuelSimVideoRenderer {
       }
     }
 
-    // 8. Top Broadcast HUD Bar
     g.setColor(new Color(15, 23, 42, 230));
     g.fillRect(0, 0, WIDTH, 46);
     g.setColor(isBlue ? new Color(37, 99, 235) : new Color(220, 38, 38));
@@ -324,7 +316,6 @@ public final class FuelSimVideoRenderer {
     g.setColor(Color.WHITE);
     g.drawString("FLUX 10413 • " + runId + " (" + robotName + ")", 16, 28);
 
-    // Match Clock + Scoreboard Pills
     g.setFont(new Font("Monospaced", Font.BOLD, 15));
     g.setColor(new Color(56, 189, 248));
     g.drawString(String.format(Locale.US, "T = %5.1fs", f.timeSec()), 420, 29);
@@ -337,11 +328,9 @@ public final class FuelSimVideoRenderer {
     g.setColor(new Color(250, 204, 21));
     g.drawString("INTAKED: " + f.intakedCount(), 795, 28);
 
-    // 9. Bottom Telemetry HUD Bar
     g.setColor(new Color(15, 23, 42, 235));
     g.fillRect(0, HEIGHT - 54, WIDTH, 54);
 
-    // Battery Voltage Gauge
     boolean brownout = f.batteryVoltage() < 6.8;
     g.setFont(new Font("SansSerif", Font.BOLD, 13));
     g.setColor(brownout ? new Color(239, 68, 68) : new Color(34, 197, 94));
@@ -355,7 +344,6 @@ public final class FuelSimVideoRenderer {
         16,
         HEIGHT - 30);
 
-    // Drive Stator Current & Shooter RPS
     g.setColor(new Color(148, 163, 184));
     g.drawString(
         String.format(
@@ -367,7 +355,6 @@ public final class FuelSimVideoRenderer {
         16,
         HEIGHT - 11);
 
-    // Last Shot Outcome Callout
     if (f.lastShotBanner() != null && !f.lastShotBanner().isEmpty()) {
       boolean scored = f.lastShotBanner().contains("SCORED");
       g.setColor(scored ? new Color(22, 101, 52, 220) : new Color(153, 27, 27, 220));
@@ -436,7 +423,6 @@ public final class FuelSimVideoRenderer {
     Color bumperFill = isBlue ? new Color(37, 99, 235, 210) : new Color(220, 38, 38, 210);
     Color topFill = new Color(51, 65, 85, 230);
 
-    // Base polygon & top polygon
     fillQuad3D(
         g,
         worldCorners[0][0],
@@ -467,7 +453,6 @@ public final class FuelSimVideoRenderer {
           0.10);
     }
 
-    // Heading arrow
     g.setColor(new Color(250, 204, 21));
     g.setStroke(new BasicStroke(2.5f));
     drawLine3D(g, rx, ry, zTop + 0.05, rx + 0.58 * cos, ry + 0.58 * sin, zTop + 0.05);
@@ -630,7 +615,6 @@ public final class FuelSimVideoRenderer {
             break;
           }
         } catch (Exception ignored) {
-          // try next
         }
       }
       if (selectedPython == null) {
@@ -677,7 +661,6 @@ public final class FuelSimVideoRenderer {
         dir = dir.getParent();
       }
     } catch (Exception ignored) {
-      // fall through
     }
     return Path.of("").toAbsolutePath();
   }
