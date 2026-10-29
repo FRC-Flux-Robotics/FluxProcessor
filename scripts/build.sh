@@ -25,7 +25,7 @@ echo "[3/3] Packaging self-contained executable build/libs/flux-processor.jar & 
   cd build/classes/main
   jar xf "$ROOT_DIR/libs/fluxfig-1.0.0.jar" frc
 )
-jar --create --file build/libs/flux-processor.jar --main-class frc.flux.processor.FluxProcessorMain -C build/classes/main .
+jar --create --date=1980-01-01T00:00:02Z --file build/libs/flux-processor.jar --main-class frc.flux.processor.FluxProcessorMain -C build/classes/main .
 cp build/libs/flux-processor.jar dist/flux-processor.jar
 
 echo "Done! Executable JAR: $ROOT_DIR/dist/flux-processor.jar"

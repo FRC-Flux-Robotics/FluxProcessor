@@ -2,8 +2,8 @@ package frc.flux.processor.analysis;
 
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
-import frc.flux.processor.wpilog.WpiLogReader.DoubleSample;
-import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
+import frc.lib.fluxfig.FluxWpiLogCodec.DoubleSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
 import java.util.ArrayList;
 import java.util.List;
 

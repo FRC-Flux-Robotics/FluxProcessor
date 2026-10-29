@@ -17,12 +17,12 @@ import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
 import frc.flux.processor.model.RunAnalysisReport.TimelinePoint;
 import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
 import frc.flux.processor.report.FuelSimVideoRenderer;
-import frc.flux.processor.wpilog.WpiLogReader;
-import frc.flux.processor.wpilog.WpiLogReader.BooleanSample;
-import frc.flux.processor.wpilog.WpiLogReader.DoubleSample;
-import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
-import frc.flux.processor.wpilog.WpiLogReader.StringSample;
-import frc.flux.processor.wpilog.WpiLogWriter;
+import frc.lib.fluxfig.FluxWpiLogCodec;
+import frc.lib.fluxfig.FluxWpiLogCodec.BooleanSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.DoubleSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
+import frc.lib.fluxfig.FluxWpiLogCodec.StringSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.Writer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -102,7 +102,7 @@ public final class RunAnalyzer {
 
     List<ParsedLog> allLogs = new ArrayList<>();
     for (Path p : wpilogs) {
-      allLogs.add(WpiLogReader.read(p));
+      allLogs.add(FluxWpiLogCodec.read(p));
     }
 
     // Resolve AUTO, /FluxFig/EffectiveSnapshot, or robot-profile.json against allLogs
@@ -1300,7 +1300,7 @@ public final class RunAnalyzer {
       List<TimelinePoint> timeline)
       throws IOException {
     FuelSimMetrics fuelSimMetrics;
-    try (WpiLogWriter writer = new WpiLogWriter(outPath, "FluxProcessor Merged Log + FuelSim 3D")) {
+    try (Writer writer = new Writer(outPath, "FluxProcessor Merged Log + FuelSim 3D")) {
       writer.registerStandardGeometrySchemas(t0Us);
 
       int eVolt = writer.startEntry("/FluxAudit/BatteryVoltage", "double", "", t0Us);
@@ -1387,7 +1387,7 @@ public final class RunAnalyzer {
   }
 
   private static FuelSimMetrics simulateAndWriteFuelSimTimeline(
-      WpiLogWriter writer,
+      Writer writer,
       Path targetRunDir,
       String runId,
       long t0Us,
@@ -1960,7 +1960,7 @@ public final class RunAnalyzer {
     return Collections.emptyList();
   }
 
-  private static void copyLogSeries(WpiLogWriter writer, String prefix, ParsedLog log)
+  private static void copyLogSeries(Writer writer, String prefix, ParsedLog log)
       throws IOException {
     if (log == null) {
       return;

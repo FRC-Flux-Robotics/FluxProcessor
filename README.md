@@ -1,4 +1,4 @@
-# FluxProcessor v2.0 — FRC Team 10413 (FLUX Robotics)
+# FluxProcessor v2027.1.0 — FRC Team 10413 (FLUX Robotics)
 
 Automated post-match and post-practice `.wpilog`/`.hoot`, multi-headset voice (`Driver` / `Operator` / `Coach`), on-robot camera snapshot (`cam-snapshots/*.jpg`), match video (`YouTube` / local `.mp4`), Digital-Twin simulation auto-calibration (`--calibrate-sim`), and JSON-RPC 2.0 Model Context Protocol (`--mcp`) analyzer for **FRC Team 10413 (FLUX Robotics)**.
 
@@ -6,7 +6,7 @@ Built on **Java 17+ compatible bytecode** (`--release 17`, running seamlessly on
 
 ---
 
-## Features (v2.0)
+## Features (v2027.1.0)
 
 1. **`FluxFig` Snapshot Hydration & Zero-Dependency `.wpilog` Multi-Bus Merger (`merged.wpilog`)**
    - Automatically hydrates `RobotProfile` (`COMP_2027`, `PRACTICE_2027`, `FUEL`, `CORAL`) and all mechanism CAN IDs, current limits, and gravity models directly from `/FluxFig/EffectiveSnapshot` inside `.wpilog` files or from a `FluxFig` CSV directory (`--config-dir <dir>`).

@@ -46,8 +46,33 @@ tasks.named('test') {
     dependsOn tasks.named('runFluxProcessorTests')
 }
 
+tasks.register('spotlessApply') {
+    group = 'formatting'
+    description = 'Normalizes UTF-8 LF line endings and trims trailing whitespace across Java source files.'
+    doLast {
+        fileTree('src').matching { include '**/*.java' }.each { File f ->
+            String original = f.getText('UTF-8')
+            String normalized = original.replace('\r\n', '\n').split('\n', -1).collect { it.replaceAll(/[ \t]+$/, '') }.join('\n')
+            if (!normalized.endsWith('\n')) {
+                normalized += '\n'
+            }
+            if (normalized != original) {
+                f.setText(normalized, 'UTF-8')
+            }
+        }
+    }
+}
+
+tasks.register('spotlessCheck') {
+    group = 'formatting'
+    description = 'Checks that Java source files have clean UTF-8 LF line endings.'
+    dependsOn 'spotlessApply'
+}
+
 jar {
     archiveFileName = 'flux-processor.jar'
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
     }

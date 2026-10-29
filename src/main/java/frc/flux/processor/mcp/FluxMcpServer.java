@@ -8,10 +8,10 @@ import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.model.RunAnalysisReport.CameraSnapshotRef;
 import frc.flux.processor.model.RunAnalysisReport.TimelinePoint;
 import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
-import frc.flux.processor.wpilog.WpiLogReader;
-import frc.flux.processor.wpilog.WpiLogReader.DoubleSample;
-import frc.flux.processor.wpilog.WpiLogReader.EntryDef;
-import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
+import frc.lib.fluxfig.FluxWpiLogCodec;
+import frc.lib.fluxfig.FluxWpiLogCodec.DoubleSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.EntryDef;
+import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -124,7 +124,7 @@ public final class FluxMcpServer {
             buildResult(
                 idRaw,
                 """
-                {"protocolVersion":"2024-11-05","serverInfo":{"name":"flux-processor-mcp","version":"2.0.0"},"capabilities":{"tools":{}}}""");
+                {"protocolVersion":"2024-11-05","serverInfo":{"name":"flux-processor-mcp","version":"2027.1.0"},"capabilities":{"tools":{}}}""");
         case "ping" -> buildResult(idRaw, "{}");
         case "tools/list" -> buildResult(idRaw, buildToolsListJson());
         case "tools/call" -> handleToolCall(idRaw, requestJson);
@@ -479,7 +479,7 @@ public final class FluxMcpServer {
       for (Path p : s.sorted().toList()) {
         String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
         if (n.endsWith(".wpilog") && !n.equals("merged.wpilog")) {
-          logs.add(WpiLogReader.read(p));
+          logs.add(FluxWpiLogCodec.read(p));
         }
       }
     }

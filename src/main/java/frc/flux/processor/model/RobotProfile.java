@@ -1,8 +1,8 @@
 package frc.flux.processor.model;
 
-import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
-import frc.flux.processor.wpilog.WpiLogReader.StringSample;
 import frc.lib.fluxfig.FluxFig;
+import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
+import frc.lib.fluxfig.FluxWpiLogCodec.StringSample;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;

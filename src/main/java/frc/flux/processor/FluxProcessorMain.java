@@ -25,7 +25,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * CLI &amp; MCP server entry point for {@code FluxProcessor} v2.0.
+ * CLI &amp; MCP server entry point for {@code FluxProcessor} v2027.1.0.
  *
  * <pre>
  * Usage:
@@ -200,7 +200,7 @@ public final class FluxProcessorMain {
         "==========================================================================================");
     System.out.printf(
         Locale.US,
-        " FLUX PROCESSOR v2.0  •  Robot Profile: %s  •  Found %d run(s)%n",
+        " FLUX PROCESSOR v2027.1.0  •  Robot Profile: %s  •  Found %d run(s)%n",
         profile.robotName(),
         runDirs.size());
     System.out.println(
@@ -333,7 +333,7 @@ public final class FluxProcessorMain {
   private static void printUsage() {
     System.out.println(
         """
-        FluxProcessor v2.0 — FRC Team 10413 (FLUX Robotics) Automated Log, Voice, Video, Digital-Twin & MCP Analyzer
+        FluxProcessor v2027.1.0 — FRC Team 10413 (FLUX Robotics) Automated Log, Voice, Video, Digital-Twin & MCP Analyzer
         Usage:
           java -jar dist/flux-processor.jar <input-dir-or-zip> [options]
           java -jar dist/flux-processor.jar --render-auto <student-auto-frames.json> [--out <output-dir>]

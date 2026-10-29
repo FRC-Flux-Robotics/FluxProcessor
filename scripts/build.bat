@@ -58,7 +58,7 @@ echo [3/3] Packaging self-contained executable build\libs\flux-processor.jar ^& 
 pushd build\classes\main
 "%JAR_CMD%" xf "%ROOT_DIR%\libs\fluxfig-1.0.0.jar" frc
 popd
-"%JAR_CMD%" --create --file build\libs\flux-processor.jar --main-class frc.flux.processor.FluxProcessorMain -C build\classes\main .
+"%JAR_CMD%" --create --date=1980-01-01T00:00:02Z --file build\libs\flux-processor.jar --main-class frc.flux.processor.FluxProcessorMain -C build\classes\main .
 copy /y build\libs\flux-processor.jar dist\flux-processor.jar >nul
 
 echo Done! Executable JAR: %ROOT_DIR%\dist\flux-processor.jar

@@ -37,5 +37,6 @@ steps:
       - |
         set -euo pipefail
         gcloud storage cp dist/flux-processor.jar gs://btvaroska/frc-10413/tools/flux-processor-latest.jar
+        gcloud storage cp dist/flux-processor.jar gs://btvaroska/frc-10413/tools/flux-processor-2027.1.0.jar
         gcloud storage cp dist/flux-processor.jar gs://btvaroska/frc-10413/tools/flux-processor-2.0.0.jar
-        echo "Published gs://btvaroska/frc-10413/tools/flux-processor-latest.jar"
+        echo "Published gs://btvaroska/frc-10413/tools/flux-processor-latest.jar (v2027.1.0)"

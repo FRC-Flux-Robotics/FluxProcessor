@@ -7,9 +7,9 @@ import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.report.AutoSimVideoRenderer;
 import frc.flux.processor.report.HtmlReportGenerator;
-import frc.flux.processor.wpilog.WpiLogReader;
-import frc.flux.processor.wpilog.WpiLogWriter;
 import frc.lib.fluxfig.FluxFig;
+import frc.lib.fluxfig.FluxWpiLogCodec;
+import frc.lib.fluxfig.FluxWpiLogCodec.Writer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Self-contained verification tests for {@code FluxProcessor} v2.0:
+ * Self-contained verification tests for {@code FluxProcessor} v2027.1.0:
  *
  * <ul>
  *   <li>Binary {@code .wpilog} read/write round-trip
@@ -88,7 +88,7 @@ public final class FluxProcessorTest {
   public static void testWpiLogReadWriteRoundTrip() throws Exception {
     Path tmpDir = createTempDir("flux-wpilog-test");
     Path logFile = tmpDir.resolve("test_rio.wpilog");
-    try (WpiLogWriter w = new WpiLogWriter(logFile, "TestHeader")) {
+    try (Writer w = new Writer(logFile, "TestHeader")) {
       int eEnable = w.startEntry("RobotEnable", "boolean", "", 1_000_000L);
       int eVolt = w.startEntry("Voltage", "double", "", 1_000_000L);
       int eMode = w.startEntry("RobotMode", "string", "", 1_000_000L);
@@ -99,7 +99,7 @@ public final class FluxProcessorTest {
       w.appendDouble(eVolt, 2_000_000L, 11.8);
     }
 
-    WpiLogReader.ParsedLog parsed = WpiLogReader.read(logFile);
+    FluxWpiLogCodec.ParsedLog parsed = FluxWpiLogCodec.read(logFile);
     assertTrue("TestHeader".equals(parsed.extraHeader()), "Expected TestHeader");
     assertTrue(parsed.getBooleanSeries("RobotEnable").size() == 1, "Expected 1 boolean sample");
     assertTrue(parsed.getDoubleSeries("Voltage").size() == 2, "Expected 2 double samples");
@@ -139,9 +139,9 @@ public final class FluxProcessorTest {
         StandardCharsets.UTF_8);
 
     // 3. Create synthetic _rio.wpilog, _drive.wpilog, _mech.wpilog over 15 seconds
-    try (WpiLogWriter rio = new WpiLogWriter(runDir.resolve("test_rio.wpilog"), "Rio");
-        WpiLogWriter drive = new WpiLogWriter(runDir.resolve("test_drive.wpilog"), "Drive");
-        WpiLogWriter mech = new WpiLogWriter(runDir.resolve("test_mech.wpilog"), "Mech")) {
+    try (Writer rio = new Writer(runDir.resolve("test_rio.wpilog"), "Rio");
+        Writer drive = new Writer(runDir.resolve("test_drive.wpilog"), "Drive");
+        Writer mech = new Writer(runDir.resolve("test_mech.wpilog"), "Mech")) {
 
       int eEnable = rio.startEntry("RobotEnable", "boolean", "", 0L);
       int eMode = rio.startEntry("RobotMode", "string", "", 0L);
@@ -209,7 +209,7 @@ public final class FluxProcessorTest {
         "Expected YouTube jump link on voice correlation");
     assertTrue(
         Files.exists(runDir.resolve("merged.wpilog")), "Expected merged.wpilog to be written");
-    WpiLogReader.ParsedLog mergedLog = WpiLogReader.read(runDir.resolve("merged.wpilog"));
+    FluxWpiLogCodec.ParsedLog mergedLog = FluxWpiLogCodec.read(runDir.resolve("merged.wpilog"));
     assertTrue(
         !mergedLog.getDoubleSeries("/Odometry/Robot.x").isEmpty(),
         "Expected /Odometry/Robot struct:Pose2d in merged.wpilog");
@@ -239,8 +239,8 @@ public final class FluxProcessorTest {
 
   public static void testOtherTeamAdvantageKitAndDoubleArrayAutoDiscovery() throws Exception {
     Path runDir = createTempDir("other-team-akit-test");
-    try (WpiLogWriter akit =
-        new WpiLogWriter(runDir.resolve("akit_match.wpilog"), "AdvantageKit")) {
+    try (Writer akit =
+        new Writer(runDir.resolve("akit_match.wpilog"), "AdvantageKit")) {
       int eRobot = akit.startEntry("/AdvantageKit/Robot", "string", "", 0L);
       int eEnable = akit.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
       int eVolt = akit.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
@@ -323,7 +323,7 @@ public final class FluxProcessorTest {
         """,
         StandardCharsets.UTF_8);
 
-    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("custom_match.wpilog"), "Custom")) {
+    try (Writer log = new Writer(runDir.resolve("custom_match.wpilog"), "Custom")) {
       int eEnable = log.startEntry("DS:enabled", "boolean", "", 0L);
       int eVolt = log.startEntry("RobotController/BatteryVoltage", "double", "", 0L);
       int eFl = log.startEntry("Phoenix6/TalonFX-10/StatorCurrent", "double", "", 0L);
@@ -411,7 +411,7 @@ public final class FluxProcessorTest {
         """,
         StandardCharsets.UTF_8);
 
-    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("akit_sc.wpilog"), "AdvantageKit")) {
+    try (Writer log = new Writer(runDir.resolve("akit_sc.wpilog"), "AdvantageKit")) {
       int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
       int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
       for (int step = 1; step <= 20; step++) {
@@ -468,7 +468,7 @@ public final class FluxProcessorTest {
         """,
         StandardCharsets.UTF_8);
 
-    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("sc_2027.wpilog"), "AdvantageKit")) {
+    try (Writer log = new Writer(runDir.resolve("sc_2027.wpilog"), "AdvantageKit")) {
       int eSnap = log.startEntry("/FluxFig/EffectiveSnapshot", "string", "", 0L);
       int eActive = log.startEntry("/FluxFig/ActiveProfile", "string", "", 0L);
       int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
@@ -525,7 +525,7 @@ public final class FluxProcessorTest {
     Files.writeString(
         snapDir.resolve("limelightsc0_t2.40s_shot.jpg"), "FAKE_JPEG_BYTES", StandardCharsets.UTF_8);
 
-    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("shop_stress.wpilog"), "ShopStress")) {
+    try (Writer log = new Writer(runDir.resolve("shop_stress.wpilog"), "ShopStress")) {
       int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
       int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
       int eBreach = log.startEntry("/VirtualGeofence/WallBreachCount", "double", "", 0L);
@@ -580,7 +580,7 @@ public final class FluxProcessorTest {
         """,
         StandardCharsets.UTF_8);
 
-    try (WpiLogWriter log = new WpiLogWriter(runDir.resolve("cal.wpilog"), "Cal")) {
+    try (Writer log = new Writer(runDir.resolve("cal.wpilog"), "Cal")) {
       int eSnap = log.startEntry("/FluxFig/EffectiveSnapshot", "string", "", 0L);
       int eEnable = log.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
       int eVolt = log.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
@@ -674,7 +674,7 @@ public final class FluxProcessorTest {
         StandardCharsets.UTF_8);
 
     for (Path dir : List.of(runA, runB)) {
-      try (WpiLogWriter w = new WpiLogWriter(dir.resolve("match.wpilog"), "MCP")) {
+      try (Writer w = new Writer(dir.resolve("match.wpilog"), "MCP")) {
         int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
         int eVolt = w.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
         for (int i = 1; i <= 25; i++) {

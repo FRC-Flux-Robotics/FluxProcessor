@@ -2,9 +2,9 @@ package frc.flux.processor.analysis;
 
 import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
 import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
-import frc.flux.processor.wpilog.WpiLogReader.DoubleSample;
-import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
 import frc.lib.fluxfig.FluxSystemSnapshot;
+import frc.lib.fluxfig.FluxWpiLogCodec.DoubleSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;

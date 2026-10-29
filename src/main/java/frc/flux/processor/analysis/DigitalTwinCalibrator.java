@@ -2,10 +2,10 @@ package frc.flux.processor.analysis;
 
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
-import frc.flux.processor.wpilog.WpiLogReader;
-import frc.flux.processor.wpilog.WpiLogReader.DoubleSample;
-import frc.flux.processor.wpilog.WpiLogReader.ParsedLog;
 import frc.lib.fluxfig.FluxFig;
+import frc.lib.fluxfig.FluxWpiLogCodec;
+import frc.lib.fluxfig.FluxWpiLogCodec.DoubleSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -68,7 +68,7 @@ public final class DigitalTwinCalibrator {
           for (Path p : s.sorted().toList()) {
             String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
             if (n.endsWith(".wpilog") && !n.equals("merged.wpilog")) {
-              allLogs.add(WpiLogReader.read(p));
+              allLogs.add(FluxWpiLogCodec.read(p));
             }
           }
         }
