@@ -449,6 +449,28 @@ public final class RunAnalyzer {
         enableDropouts);
   }
 
+  /** Resolves the match-window origin timestamp (`t0Us`) for MCP and timeline alignment. */
+  public static long resolveMatchWindowOriginUs(String runId, List<ParsedLog> allLogs) {
+    if (allLogs == null || allLogs.isEmpty()) {
+      return 0L;
+    }
+    ParsedLog rioLog = allLogs.get(0);
+    for (ParsedLog parsed : allLogs) {
+      String name = parsed.sourcePath().getFileName().toString().toLowerCase(Locale.ROOT);
+      if (name.contains("_rio")
+          || name.startsWith("rio_")
+          || parsed.entriesByName().containsKey("RobotEnable")
+          || parsed.entriesByName().containsKey("/DriverStation/Enabled")
+          || parsed.entriesByName().containsKey("DS:enabled")) {
+        rioLog = parsed;
+        if (name.contains("_rio") || name.startsWith("rio_")) {
+          break;
+        }
+      }
+    }
+    return resolveMatchWindowContext(runId != null ? runId : "", allLogs, rioLog).t0Us();
+  }
+
   private static String evaluateVerdictAndAlerts(
       BatteryMetrics battery,
       List<CornerMetrics> swerveCorners,
@@ -893,6 +915,29 @@ public final class RunAnalyzer {
         inShot = false;
       }
     }
+    if (inShot && !timeline.isEmpty()) {
+      TimelinePoint lastPt = timeline.get(timeline.size() - 1);
+      double dur = Math.max(0.2, lastPt.timeSec() - shotStartSec);
+      int shotNum = shots.size() + 1;
+      double asym = Math.abs(peakLeftRps - peakRightRps);
+      String status =
+          (minVoltDuringShot < 7.5 || asym > 6.0) ? "VOLTAGE SAG / ASYM" : "NOMINAL";
+      String vLink =
+          buildVideoJumpLink(videoUrl, videoOffsetSec, shotStartSec - enableOffsetSec);
+      shots.add(
+          new ShotEvent(
+              shotNum,
+              shotStartSec,
+              dur,
+              peakLeftRps,
+              peakRightRps,
+              asym,
+              shotHoodRot,
+              peakFeederAmps,
+              minVoltDuringShot,
+              vLink,
+              status));
+    }
     return shots;
   }
 
@@ -1210,6 +1255,32 @@ public final class RunAnalyzer {
         if (Files.exists(f)) {
           for (String line : Files.readAllLines(f, StandardCharsets.UTF_8)) {
             parseVoiceLine(line, entry.getValue(), utterances);
+          }
+        }
+      }
+      Path oggFile = runDir.resolve("driver-audio.ogg");
+      if (utterances.isEmpty() && Files.exists(oggFile)) {
+        for (String line : Files.readAllLines(oggFile, StandardCharsets.UTF_8)) {
+          String trimmed = line.trim();
+          if (trimmed.startsWith("CUE|")) {
+            String role = "DRIVER";
+            double t = 0.0;
+            String text = "";
+            for (String token : trimmed.substring(4).split("\\|", 3)) {
+              if (token.startsWith("role=")) {
+                role = token.substring(5).trim();
+              } else if (token.startsWith("t=")) {
+                try {
+                  t = Double.parseDouble(token.substring(2).trim());
+                } catch (NumberFormatException ignored) {
+                }
+              } else if (token.startsWith("text=")) {
+                text = token.substring(5).trim();
+              }
+            }
+            if (!text.isBlank()) {
+              utterances.add(new VoiceUtterance(role, t, text));
+            }
           }
         }
       }

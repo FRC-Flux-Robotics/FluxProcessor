@@ -261,8 +261,18 @@ public final class DigitalTwinCalibrator {
                 "Drive/WheelRadiusCalGroundMeters",
                 "/AdvantageKit/RealOutputs/Drive/WheelRadiusCalGroundMeters"));
     if (!wheelTravelRot.isEmpty() && !groundDistMeters.isEmpty()) {
-      double rot = Math.abs(wheelTravelRot.get(wheelTravelRot.size() - 1).value());
-      double dist = Math.abs(groundDistMeters.get(groundDistMeters.size() - 1).value());
+      double lastRot = wheelTravelRot.get(wheelTravelRot.size() - 1).value();
+      double firstRot = wheelTravelRot.get(0).value();
+      double rot =
+          (wheelTravelRot.size() > 1 && Math.abs(lastRot - firstRot) > 1.0)
+              ? Math.abs(lastRot - firstRot)
+              : Math.abs(lastRot);
+      double lastDist = groundDistMeters.get(groundDistMeters.size() - 1).value();
+      double firstDist = groundDistMeters.get(0).value();
+      double dist =
+          (groundDistMeters.size() > 1 && Math.abs(lastDist - firstDist) > 0.3)
+              ? Math.abs(lastDist - firstDist)
+              : Math.abs(lastDist);
       if (rot > 1.0 && dist > 0.3) {
         double est = dist / (2.0 * Math.PI * rot);
         if (est >= 0.044 && est <= 0.056) {
@@ -515,7 +525,13 @@ public final class DigitalTwinCalibrator {
       if (Double.isNaN(appliedV)) {
         continue;
       }
-      double gravTerm = isElevator ? kG : 0.0;
+      double gravTerm = 0.0;
+      if (isElevator) {
+        gravTerm = kG;
+      } else if (isArm) {
+        double pRot = RunAnalyzer.sampleDoubleAt(pos, curVel.timestampUs(), 0.0);
+        gravTerm = kG * Math.cos(pRot * 2.0 * Math.PI);
+      }
       double residual =
           appliedV - gravTerm - kS * Math.signum(curVel.value()) - kV * curVel.value();
       double kaSample = residual / a;

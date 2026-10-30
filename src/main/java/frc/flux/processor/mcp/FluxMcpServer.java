@@ -173,8 +173,15 @@ public final class FluxMcpServer {
       for (EntryDef e : log.entriesByName().values()) {
         int samples =
             log.getDoubleSeries(e.name()).size()
+                + log.getDoubleArraySeries(e.name()).size()
                 + log.getBooleanSeries(e.name()).size()
                 + log.getStringSeries(e.name()).size();
+        if (samples == 0) {
+          samples =
+              log.getDoubleSeries(e.name() + ".x").size()
+                  + log.getDoubleSeries(e.name() + "[0]").size()
+                  + log.getBooleanSeries(e.name() + "[0]").size();
+        }
         if (!first) {
           sb.append(",");
         }
@@ -233,7 +240,7 @@ public final class FluxMcpServer {
           Double.isNaN(worstVal) ? 0.0 : worstVal);
     }
 
-    long t0Us = logs.get(0).minTimestampUs();
+    long t0Us = RunAnalyzer.resolveMatchWindowOriginUs(runId, logs);
     int hits = 0;
     double firstSec = -1.0;
     double extreme = Double.NaN;
