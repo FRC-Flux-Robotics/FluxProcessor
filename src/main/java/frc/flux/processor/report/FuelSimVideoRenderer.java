@@ -81,7 +81,6 @@ public final class FuelSimVideoRenderer {
     }
     Path outMp4 = targetRunDir.resolve("replay-3d.mp4");
 
-    // 1. Write sim-frames.json and try hardware-accelerated MuJoCo 3.15 OpenGL/EGL + 14-mesh CAD renderer
     try {
       Path simJson = targetRunDir.resolve("sim-frames.json");
       writeSimFramesJson(simJson, runId, robotName, alliance, batteryName, frames);

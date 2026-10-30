@@ -72,7 +72,17 @@ public final class AutoSimVideoRenderer {
       double batteryVoltage,
       double driveStatorAmps,
       double accelScale,
-      String stateLabel) {}
+      String stateLabel) {
+    /** 2026 FUEL shooter velocity in RPS (stored in the shared telemetry slot). */
+    public double shooterRps() {
+      return accelScale;
+    }
+
+    /** 2026 FUEL hood angle in motor rotations (stored in the shared telemetry slot). */
+    public double hoodRotations() {
+      return elevatorHeightM;
+    }
+  }
 
   /** 3D parabolic ballistic trajectory of a fired 2026 {@code FUEL} game piece. */
   public record ShotArc(
@@ -478,7 +488,6 @@ public final class AutoSimVideoRenderer {
       double totalDuration) {
     AutoFrame f = frames.get(idx);
 
-    // 1. Dark Arena Backdrop
     g.setColor(new Color(10, 14, 23));
     g.fillRect(0, 0, WIDTH, HEIGHT);
 
@@ -488,10 +497,8 @@ public final class AutoSimVideoRenderer {
       draw2027EmptyField3D(g, f, frames, idx, camX, camY);
     }
 
-    // 6. Top-Right Picture-in-Picture (PiP) 2D Top-Down Blueprint Mini-Map
     drawTopDownMiniMap(g, frames, shots, floorBalls, field2026, idx);
 
-    // 7. Top Broadcast HUD Bar
     g.setColor(new Color(15, 23, 42, 235));
     g.fillRect(0, 0, WIDTH, 46);
     g.setColor(new Color(56, 189, 248));
@@ -515,7 +522,6 @@ public final class AutoSimVideoRenderer {
     g.setColor(new Color(15, 23, 42));
     g.drawString("STATE: " + f.stateLabel(), 757, 27);
 
-    // 8. Bottom Telemetry HUD Bar
     g.setColor(new Color(15, 23, 42, 238));
     g.fillRect(0, HEIGHT - 56, WIDTH, 56);
     g.setColor(new Color(51, 65, 85));
@@ -548,8 +554,8 @@ public final class AutoSimVideoRenderer {
           String.format(
               Locale.US,
               "SHOOTER: %5.1f RPS  Hood=%4.2f rot  Intake=%+5.1f RPS  |  BATT: %5.2fV (%3.0fA)  HUB SCORES: %d / %d",
-              f.accelScale(),
-              f.elevatorHeightM(),
+              f.shooterRps(),
+              f.hoodRotations(),
               f.intakeRollerRps(),
               f.batteryVoltage(),
               f.driveStatorAmps(),
@@ -575,7 +581,6 @@ public final class AutoSimVideoRenderer {
 
   private static void draw2027EmptyField3D(
       Graphics2D g, AutoFrame f, List<AutoFrame> frames, int idx, double camX, double camY) {
-    // 1. Empty Field Carpet & 1.0 m Grid Lines (-6 m to +6 m)
     fillQuad3D(
         g,
         -6.0,
@@ -662,7 +667,6 @@ public final class AutoSimVideoRenderer {
       int idx,
       double camX,
       double camY) {
-    // 1. 2026 Blue Half-Field Carpet (0.0m to 8.5m X, 0.5m to 7.7m Y)
     fillQuad3D(
         g,
         0.0,
@@ -714,7 +718,6 @@ public final class AutoSimVideoRenderer {
         new Color(30, 64, 175, 110),
         new Color(96, 165, 250, 180));
 
-    // 2. Floor FUEL Balls (15 cm yellow game pieces)
     for (FloorFuelBall ball : floorBalls) {
       if (f.timeSec() <= ball.pickedUpTimeSec()) {
         double[] bp = project(ball.xMeters(), ball.yMeters(), 0.08, camX, camY, true);
@@ -728,7 +731,6 @@ public final class AutoSimVideoRenderer {
       }
     }
 
-    // 3. Full Planned Ghost Path & Driven Odometry Trail
     g.setColor(new Color(148, 163, 184, 65));
     g.setStroke(
         new BasicStroke(
@@ -749,7 +751,6 @@ public final class AutoSimVideoRenderer {
           g, a.xMeters(), a.yMeters(), 0.02, b.xMeters(), b.yMeters(), 0.02, camX, camY, true);
     }
 
-    // 4. Aiming Laser Line from Robot to Blue Hub when PREPPING_SHOT or SHOOTING
     if ("PREPPING_SHOT".equals(f.stateLabel()) || "SHOOTING".equals(f.stateLabel())) {
       g.setColor(new Color(56, 189, 248, 130));
       g.setStroke(
@@ -764,13 +765,10 @@ public final class AutoSimVideoRenderer {
           g, f.xMeters(), f.yMeters(), 0.45, HUB_BLUE_X, HUB_BLUE_Y, HUB_TOP_Z, camX, camY, true);
     }
 
-    // 5. 3D 2026 FUEL Robot
     draw2026FuelRobot3D(g, f, camX, camY);
 
-    // 6. 3D Blue Hexagonal Hub at (4.63m, 4.21m, Z=1.83m)
     draw2026HexHub3D(g, camX, camY);
 
-    // 7. 3D Parabolic FUEL Shot Trajectories & In-Flight FUEL Balls
     for (ShotArc shot : shots) {
       if (f.timeSec() < shot.launchTimeSec()) {
         continue;

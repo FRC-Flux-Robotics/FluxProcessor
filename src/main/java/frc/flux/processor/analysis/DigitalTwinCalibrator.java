@@ -152,7 +152,6 @@ public final class DigitalTwinCalibrator {
 
     String updatedSha = "unmodified";
     if (fig != null && configDir != null) {
-      // 1. Update batteries.csv if present
       if (Files.exists(configDir.resolve("batteries.csv")) && !batteryMap.isEmpty()) {
         List<FluxFig.BatterySpec> currentBatteries =
             new ArrayList<>(fig.bindTable("batteries", FluxFig.BatterySpec.class));
@@ -194,7 +193,6 @@ public final class DigitalTwinCalibrator {
         fig.saveBatterySpecs(currentBatteries);
       }
 
-      // 2. Update wheelRadiusMeters and swerveCouplingRatio in parameters.csv if present
       if (Files.exists(configDir.resolve("parameters.csv"))) {
         FluxFig tunableFig = FluxFig.load(configDir, targetProfile);
         tunableFig.setMode(FluxFig.Mode.TUNING);

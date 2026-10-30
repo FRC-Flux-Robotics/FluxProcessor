@@ -523,7 +523,6 @@ public record RobotProfile(
             ? requested.robotName()
             : null;
 
-    // 1. Check for embedded /FluxFig/EffectiveSnapshot inside the .wpilog files
     String snapshotText = extractFluxFigSnapshotFromLogs(allLogs);
     if (snapshotText != null && !snapshotText.isBlank()) {
       try {
@@ -535,7 +534,6 @@ public record RobotProfile(
       }
     }
 
-    // 2. Check for local FluxFig CSV directory or robot-profile.json in runDir
     if (runDir != null) {
       Path configsSubdir = runDir.resolve("configs");
       if (Files.isDirectory(configsSubdir)
@@ -574,7 +572,6 @@ public record RobotProfile(
       }
     }
 
-    // 3. If an explicit profile was given and its drive topics exist in the logs, use it as-is
     if (requested != null
         && !"AUTO".equals(requested.robotName())
         && !requested.corners().isEmpty()
@@ -582,7 +579,6 @@ public record RobotProfile(
       return requested;
     }
 
-    // 4. Check if logs match Team 10413 FUEL or CORAL presets
     if (allTopics.contains("Phoenix6/Pigeon2-20/Yaw")
         || allTopics.contains("Phoenix6/Pigeon2-20/SupplyVoltage")
         || (allTopics.contains("Phoenix6/TalonFX-2/StatorCurrent")
@@ -614,7 +610,6 @@ public record RobotProfile(
           CORAL.mechanisms());
     }
 
-    // 5. Auto-discover from arbitrary FRC team logs (AdvantageKit, Phoenix 6, REV URCL, or generic)
     String inferredName =
         (requested != null
                 && !"AUTO".equals(requested.robotName())
@@ -714,14 +709,12 @@ public record RobotProfile(
       }
     }
 
-    // 1. Check AdvantageKit / Swerve Module0..3 or ModuleFL..BR topics first
     Map<String, CornerConfig> akitCorners = discoverAdvantageKitCorners(allTopics);
     if (akitCorners.size() == 4) {
       List<MechMotorSpec> mechs = discoverGenericMechanisms(allTopics);
       return new RobotProfile(robotName, pigeonId, 0.0508, 6.12, akitCorners, mechs);
     }
 
-    // 2. Check CTRE Phoenix 6 TalonFX-<ID> topics across logs
     Set<Integer> driveBusTalons = new LinkedHashSet<>();
     Set<Integer> allTalons = new LinkedHashSet<>();
     for (ParsedLog log : allLogs) {

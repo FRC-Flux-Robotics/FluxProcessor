@@ -111,7 +111,6 @@ public final class FluxProcessorTest {
   public static void testEndToEndSyntheticRunWithVoiceAndVideo() throws Exception {
     Path runDir = createTempDir("flux-run-test");
 
-    // 1. Write canonical run-meta.json with Named Battery "Thor" and YouTube URL
     Files.writeString(
         runDir.resolve("run-meta.json"),
         """
@@ -129,7 +128,6 @@ public final class FluxProcessorTest {
         """,
         StandardCharsets.UTF_8);
 
-    // 2. Write multi-headset voice transcript (Driver + Operator)
     Files.writeString(
         runDir.resolve("voice-notes.txt"),
         """
@@ -138,7 +136,6 @@ public final class FluxProcessorTest {
         """,
         StandardCharsets.UTF_8);
 
-    // 3. Create synthetic _rio.wpilog, _drive.wpilog, _mech.wpilog over 15 seconds
     try (Writer rio = new Writer(runDir.resolve("test_rio.wpilog"), "Rio");
         Writer drive = new Writer(runDir.resolve("test_drive.wpilog"), "Drive");
         Writer mech = new Writer(runDir.resolve("test_mech.wpilog"), "Mech")) {
