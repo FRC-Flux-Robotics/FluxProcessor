@@ -1,7 +1,9 @@
 package frc.flux.processor;
 
+import frc.flux.processor.analysis.BatteryAnalyzer;
 import frc.flux.processor.analysis.DigitalTwinCalibrator;
 import frc.flux.processor.analysis.RunAnalyzer;
+import frc.flux.processor.hoot.HootConverter;
 import frc.flux.processor.mcp.FluxMcpServer;
 import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
@@ -79,7 +81,8 @@ public final class FluxProcessorTest {
       testDigitalTwinCalibratorCsvWriteBack();
       testMcpServerMultimodalTools();
       testStudentAutoVideoRendererCli();
-      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (10/10)");
+      testBinaryAudioEmptyBatteryNoDataAndRecursiveHootDiscovery();
+      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (11/11)");
     } finally {
       cleanupTempDirs();
     }
@@ -561,8 +564,8 @@ public final class FluxProcessorTest {
     assertTrue(
         report.systemHealth() != null
             && report.systemHealth().controllerType().contains("WPILOG-ONLY")
-            && report.systemHealth().totalCpuPct() == 0.0
-            && report.systemHealth().freeStorageMb() == 0.0,
+            && Double.isNaN(report.systemHealth().totalCpuPct())
+            && Double.isNaN(report.systemHealth().freeStorageMb()),
         "Expected .wpilog-only run without system-snapshot.txt not to fabricate fake SystemCore CPU/storage stats");
   }
 
@@ -813,6 +816,101 @@ public final class FluxProcessorTest {
     assertTrue(
         starterHtml.contains("STUDENT NOTE: Empty starter auto"),
         "Expected unedited empty STUDENT routine to display STUDENT NOTE starter callout");
+  }
+
+  public static void testBinaryAudioEmptyBatteryNoDataAndRecursiveHootDiscovery() throws Exception {
+    RunAnalysisReport.BatteryMetrics emptyBatt = BatteryAnalyzer.analyze("2026-B01", List.of(), 0);
+    assertTrue(
+        "NO DATA".equals(emptyBatt.healthGrade()),
+        "Empty battery series must report NO DATA, got " + emptyBatt.healthGrade());
+    assertTrue(
+        Double.isNaN(emptyBatt.estimatedRintMilliOhms()),
+        "Empty battery series must not fabricate 16.0 mOhm R_int");
+
+    Path runDir = createTempDir("flux-binary-audio-hoot");
+    Files.write(
+        runDir.resolve("driver-audio.ogg"),
+        new byte[] {0x4F, 0x67, 0x67, 0x53, 0x00, (byte) 0xFF, (byte) 0xFE, (byte) 0x80, 0x01});
+    Files.write(
+        runDir.resolve("mentor-audio.wav"),
+        new byte[] {'R', 'I', 'F', 'F', 36, 0, 0, 0, 'W', 'A', 'V', 'E', (byte) 0xFF, (byte) 0x80});
+    Files.writeString(
+        runDir.resolve("audio-sync.json"),
+        "{\"audioFile\":\"mentor-audio.wav\",\"enableEpochMs\":1700000000000,\"disableEpochMs\":1700000015000}\n",
+        StandardCharsets.UTF_8);
+
+    try (Writer w = new Writer(runDir.resolve("fuel_run.wpilog"), "FUEL")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+      for (int i = 1; i <= 15; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eVolt, ts, 12.4);
+      }
+    }
+
+    RunAnalysisReport report =
+        RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+    assertTrue(
+        "NO DATA".equals(report.battery().healthGrade())
+            && Double.isNaN(report.battery().estimatedRintMilliOhms()),
+        "Unloaded run without current draw must grade battery NO DATA, got "
+            + report.battery().healthGrade());
+    HtmlReportGenerator.writeRunReport(report, runDir.resolve("report.html"));
+    String html = Files.readString(runDir.resolve("report.html"), StandardCharsets.UTF_8);
+    assertTrue(
+        html.contains("NO DATA") && !html.contains("NaN mΩ"),
+        "HTML report must render NO DATA / N/A rather than NaN mΩ");
+
+    // Verify recursive Files.walk discovery of nested .hoot files.
+    Path nestedDir = runDir.resolve("usb_drive/Drivetrain");
+    Files.createDirectories(nestedDir);
+    Files.writeString(nestedDir.resolve("rio_2026-11-20.hoot"), "FAKE_HOOT", StandardCharsets.UTF_8);
+    Path mockOwlet = runDir.resolve("mock-owlet.sh");
+    Files.writeString(
+        mockOwlet,
+        "#!/usr/bin/env bash\n"
+            + "if [ \"$2\" = \"-S\" ]; then echo 'RobotEnable : 1'; exit 0; fi\n"
+            + "OUT=\"$2\"\n"
+            + "python3 -c 'import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b\"WPILOG\" + b\"\\x00\"*1200)' \"$OUT\"\n",
+        StandardCharsets.UTF_8);
+    mockOwlet.toFile().setExecutable(true);
+    Path convOut = createTempDir("flux-hoot-out");
+    List<Path> converted = HootConverter.convertDirectoryIfNeeded(runDir, convOut, mockOwlet);
+    assertTrue(
+        converted.size() == 1
+            && converted
+                .get(0)
+                .getFileName()
+                .toString()
+                .equals("usb_drive_Drivetrain_rio_2026-11-20.wpilog"),
+        "Expected recursive HootConverter to convert nested .hoot file, got " + converted);
+
+    // End-to-end ZIP ingestion check matching FluxTray M1.8/M1.9 output layout.
+    Path zipBundle = createTempDir("flux-zip-ingest").resolve("match-logs_2026-11-20_180000_FUEL.zip");
+    try (java.util.zip.ZipOutputStream zos =
+        new java.util.zip.ZipOutputStream(Files.newOutputStream(zipBundle))) {
+      for (String fname :
+          List.of("fuel_run.wpilog", "mentor-audio.wav", "audio-sync.json")) {
+        zos.putNextEntry(new java.util.zip.ZipEntry("run_ct_01/" + fname));
+        Files.copy(runDir.resolve(fname), zos);
+        zos.closeEntry();
+      }
+      zos.putNextEntry(new java.util.zip.ZipEntry("run_ct_01/system-snapshot.txt"));
+      zos.write(
+          "[PLATFORM]\ncontrollerType=ROBORIO\nhostname=roboRIO-10413-FRC\n[CPU_AND_IRQ]\ntotalCpuPct=22.0\n[STORAGE]\nfreeStorageMb=512.0\n"
+              .getBytes(StandardCharsets.UTF_8));
+      zos.closeEntry();
+    }
+    Path zipOut = createTempDir("flux-zip-out");
+    FluxProcessorMain.main(
+        new String[] {zipBundle.toString(), "--out", zipOut.toString(), "--no-merge"});
+    Path zipReport = zipOut.resolve("run_ct_01").resolve("report.html");
+    assertTrue(Files.isRegularFile(zipReport), "FluxProcessor CLI ingested FluxTray ZIP cleanly");
+    String zipHtml = Files.readString(zipReport, StandardCharsets.UTF_8);
+    assertTrue(
+        zipHtml.contains("ROBORIO") && zipHtml.contains("NOT MEASURED"),
+        "FluxProcessor report preserves truthful ROBORIO snapshot with NOT MEASURED absent fields");
   }
 
   private static Path createSampleFluxFigDirectory() throws Exception {

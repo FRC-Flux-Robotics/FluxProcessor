@@ -228,14 +228,22 @@ public final class FluxProcessorMain {
                   report.fuelSim().ballsLaunched(),
                   report.fuelSim().hubScoringAccuracyPct())
               : "N/A";
+      String rintStr =
+          Double.isFinite(report.battery().estimatedRintMilliOhms())
+              ? String.format(Locale.US, "%4.1f mΩ", report.battery().estimatedRintMilliOhms())
+              : "NO DATA";
+      String minVoltStr =
+          Double.isFinite(report.battery().minVoltage())
+              ? String.format(Locale.US, "%5.2fV", report.battery().minVoltage())
+              : "  N/A";
       System.out.printf(
           Locale.US,
-          " [%s] %-38s | Batt: %-16s (R_int: %4.1f mΩ, Min: %5.2fV) | Peak Stator: %4.0fA | Shots: %2d (FuelSim: %s) | %s%n",
+          " [%s] %-38s | Batt: %-16s (R_int: %s, Min: %s) | Peak Stator: %4.0fA | Shots: %2d (FuelSim: %s) | %s%n",
           report.overallVerdict(),
           report.runId(),
           report.battery().batteryName(),
-          report.battery().estimatedRintMilliOhms(),
-          report.battery().minVoltage(),
+          rintStr,
+          minVoltStr,
           report.battery().peakDriveStatorAmps(),
           report.shots().size(),
           fuelSimStr,
@@ -277,7 +285,8 @@ public final class FluxProcessorMain {
     if (!Files.isDirectory(root)) {
       return List.of();
     }
-    if (hasLogFiles(root)) {
+    if (hasDirectLogFiles(root)
+        || (hasRunMarkerFile(root) && hasRecursiveLogFiles(root))) {
       return List.of(root);
     }
     List<Path> subDirs;
@@ -289,21 +298,37 @@ public final class FluxProcessorMain {
     }
     List<Path> valid = new ArrayList<>();
     for (Path sub : subDirs) {
-      if (hasLogFiles(sub)) {
+      if (hasRecursiveLogFiles(sub)) {
         valid.add(sub);
       }
     }
-    return valid;
+    if (!valid.isEmpty()) {
+      return valid;
+    }
+    return hasRecursiveLogFiles(root) ? List.of(root) : List.of();
   }
 
-  private static boolean hasLogFiles(Path dir) throws IOException {
+  private static boolean hasRunMarkerFile(Path dir) {
+    return Files.isRegularFile(dir.resolve("run-meta.json"))
+        || Files.isRegularFile(dir.resolve("system-snapshot.txt"))
+        || Files.isRegularFile(dir.resolve("audio-sync.json"));
+  }
+
+  private static boolean hasDirectLogFiles(Path dir) throws IOException {
     try (Stream<Path> s = Files.list(dir)) {
-      return s.anyMatch(
-          p -> {
-            String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
-            return (n.endsWith(".wpilog") && !n.equals("merged.wpilog")) || n.endsWith(".hoot");
-          });
+      return s.filter(Files::isRegularFile).anyMatch(FluxProcessorMain::isRawLogFile);
     }
+  }
+
+  private static boolean hasRecursiveLogFiles(Path dir) throws IOException {
+    try (Stream<Path> s = Files.walk(dir, 4)) {
+      return s.filter(Files::isRegularFile).anyMatch(FluxProcessorMain::isRawLogFile);
+    }
+  }
+
+  private static boolean isRawLogFile(Path p) {
+    String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
+    return (n.endsWith(".wpilog") && !n.equals("merged.wpilog")) || n.endsWith(".hoot");
   }
 
   private static void extractZipArchive(Path zipFile, Path targetDir) throws IOException {

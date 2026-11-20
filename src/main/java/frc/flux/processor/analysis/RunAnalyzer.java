@@ -225,30 +225,32 @@ public final class RunAnalyzer {
       int enableDropouts) {}
 
   private static List<Path> discoverWpilogFiles(Path runDir, Path outRunDir) throws IOException {
-    Map<String, Path> byFileName = new LinkedHashMap<>();
+    Map<String, Path> byRelKey = new LinkedHashMap<>();
     if (Files.isDirectory(runDir)) {
-      try (Stream<Path> s = Files.list(runDir)) {
-        for (Path p : s.sorted().toList()) {
+      try (Stream<Path> s = Files.walk(runDir, 4)) {
+        for (Path p : s.filter(Files::isRegularFile).sorted().toList()) {
           String n = p.getFileName().toString();
           String lower = n.toLowerCase(Locale.ROOT);
           if (lower.endsWith(".wpilog") && !lower.equals("merged.wpilog")) {
-            byFileName.put(n, p);
+            String key = runDir.relativize(p).toString().replace('\\', '/');
+            byRelKey.put(key, p);
           }
         }
       }
     }
     if (outRunDir != null && !outRunDir.equals(runDir) && Files.isDirectory(outRunDir)) {
-      try (Stream<Path> s = Files.list(outRunDir)) {
-        for (Path p : s.sorted().toList()) {
+      try (Stream<Path> s = Files.walk(outRunDir, 4)) {
+        for (Path p : s.filter(Files::isRegularFile).sorted().toList()) {
           String n = p.getFileName().toString();
           String lower = n.toLowerCase(Locale.ROOT);
           if (lower.endsWith(".wpilog") && !lower.equals("merged.wpilog")) {
-            byFileName.put(n, p);
+            String key = outRunDir.relativize(p).toString().replace('\\', '/');
+            byRelKey.put(key, p);
           }
         }
       }
     }
-    return new ArrayList<>(byFileName.values());
+    return new ArrayList<>(byRelKey.values());
   }
 
   private static ParsedLog[] assignBusLogs(List<ParsedLog> allLogs, RobotProfile profile) {
@@ -490,14 +492,24 @@ public final class RunAnalyzer {
               battery.minVoltageTimeSec(),
               battery.peakDriveStatorAmps(),
               battery.enableDropouts()));
-    } else if (battery.minVoltage() < 7.5 || battery.estimatedRintMilliOhms() > 20.0) {
+    } else if ((Double.isFinite(battery.minVoltage()) && battery.minVoltage() < 7.5)
+        || (Double.isFinite(battery.estimatedRintMilliOhms())
+            && battery.estimatedRintMilliOhms() > 20.0)) {
       overallVerdict = "WARN";
+      String rintStr =
+          Double.isFinite(battery.estimatedRintMilliOhms())
+              ? String.format(Locale.US, "%.1f mΩ", battery.estimatedRintMilliOhms())
+              : "NO DATA";
+      String minVStr =
+          Double.isFinite(battery.minVoltage())
+              ? String.format(Locale.US, "%.2f V", battery.minVoltage())
+              : "N/A";
       alerts.add(
           String.format(
               Locale.US,
-              "Battery min voltage %.2f V (estimated R_int = %.1f mΩ) — monitor battery health.",
-              battery.minVoltage(),
-              battery.estimatedRintMilliOhms()));
+              "Battery min voltage %s (estimated R_int = %s) — monitor battery health.",
+              minVStr,
+              rintStr));
     }
 
     for (CornerMetrics c : swerveCorners) {
@@ -567,13 +579,21 @@ public final class RunAnalyzer {
     }
 
     if (alerts.isEmpty()) {
+      String minVStr =
+          Double.isFinite(battery.minVoltage())
+              ? String.format(Locale.US, "%.2f V", battery.minVoltage())
+              : "N/A";
+      String rintStr =
+          Double.isFinite(battery.estimatedRintMilliOhms())
+              ? String.format(Locale.US, "%.1f mΩ", battery.estimatedRintMilliOhms())
+              : "NO DATA";
       alerts.add(
           String.format(
               Locale.US,
-              "All 4 swerve corners and %d mechanisms within nominal bounds (Min Battery %.2f V, R_int %.1f mΩ).",
+              "All 4 swerve corners and %d mechanisms within nominal bounds (Min Battery %s, R_int %s).",
               mechanisms.size(),
-              battery.minVoltage(),
-              battery.estimatedRintMilliOhms()));
+              minVStr,
+              rintStr));
     }
     return overallVerdict;
   }
@@ -1259,35 +1279,57 @@ public final class RunAnalyzer {
         }
       }
       Path oggFile = runDir.resolve("driver-audio.ogg");
-      if (utterances.isEmpty() && Files.exists(oggFile)) {
-        for (String line : Files.readAllLines(oggFile, StandardCharsets.UTF_8)) {
-          String trimmed = line.trim();
-          if (trimmed.startsWith("CUE|")) {
-            String role = "DRIVER";
-            double t = 0.0;
-            String text = "";
-            for (String token : trimmed.substring(4).split("\\|", 3)) {
-              if (token.startsWith("role=")) {
-                role = token.substring(5).trim();
-              } else if (token.startsWith("t=")) {
-                try {
-                  t = Double.parseDouble(token.substring(2).trim());
-                } catch (NumberFormatException ignored) {
+      if (utterances.isEmpty() && Files.isRegularFile(oggFile) && isLegacyTextCueStub(oggFile)) {
+        try {
+          for (String line : Files.readAllLines(oggFile, StandardCharsets.UTF_8)) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("CUE|")) {
+              String role = "DRIVER";
+              double t = 0.0;
+              String text = "";
+              for (String token : trimmed.substring(4).split("\\|", 3)) {
+                if (token.startsWith("role=")) {
+                  role = token.substring(5).trim();
+                } else if (token.startsWith("t=")) {
+                  try {
+                    t = Double.parseDouble(token.substring(2).trim());
+                  } catch (NumberFormatException ignored) {
+                  }
+                } else if (token.startsWith("text=")) {
+                  text = token.substring(5).trim();
                 }
-              } else if (token.startsWith("text=")) {
-                text = token.substring(5).trim();
+              }
+              if (!text.isBlank()) {
+                utterances.add(new VoiceUtterance(role, t, text));
               }
             }
-            if (!text.isBlank()) {
-              utterances.add(new VoiceUtterance(role, t, text));
-            }
           }
+        } catch (java.nio.charset.CharacterCodingException ignored) {
+          // Real binary audio container (Ogg/Opus/Vorbis); skip text cue parsing.
         }
       }
     }
 
     utterances.sort(Comparator.comparingDouble(VoiceUtterance::timeSec));
     return new RunMeta(battery, gitSha, configSha, videoUrl, videoOffsetSec, utterances);
+  }
+
+  private static boolean isLegacyTextCueStub(Path file) {
+    byte[] magic = "OggS-FLUX-3MIC-V1".getBytes(StandardCharsets.US_ASCII);
+    try (java.io.InputStream in = Files.newInputStream(file)) {
+      byte[] head = in.readNBytes(magic.length);
+      if (head.length < magic.length) {
+        return false;
+      }
+      for (int i = 0; i < magic.length; i++) {
+        if (head[i] != magic[i]) {
+          return false;
+        }
+      }
+      return true;
+    } catch (IOException e) {
+      return false;
+    }
   }
 
   private static List<VoiceUtterance> parseJsonVoiceNotesArray(String json) {

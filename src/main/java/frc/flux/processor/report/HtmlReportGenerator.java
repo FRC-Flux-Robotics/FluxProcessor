@@ -150,15 +150,18 @@ public final class HtmlReportGenerator {
                 "Named Battery",
                 b.batteryName(),
                 String.format(
-                    Locale.US, "Est. R_int: %.1f mΩ (%s)", b.estimatedRintMilliOhms(), b.healthGrade())))
+                    Locale.US,
+                    "Est. R_int: %s (%s)",
+                    fmtFinite(b.estimatedRintMilliOhms(), "%.1f mΩ", "N/A"),
+                    b.healthGrade())))
         .append(
             kpiCard(
                 "Min Battery Voltage",
-                String.format(Locale.US, "%.2f V", b.minVoltage()),
+                fmtFinite(b.minVoltage(), "%.2f V", "N/A"),
                 String.format(
                     Locale.US,
-                    "Rest: %.2f V | Sag @ %.1fs",
-                    b.restingVoltage(),
+                    "Rest: %s | Sag @ %.1fs",
+                    fmtFinite(b.restingVoltage(), "%.2f V", "N/A"),
                     b.minVoltageTimeSec())))
         .append(
             kpiCard(
@@ -611,15 +614,15 @@ public final class HtmlReportGenerator {
           .append(
               String.format(
                   Locale.US,
-                  "Loop p50=%.2fms / p99=%.2fms • CPU=%.1f%% (Java %.1f%% / Vision %.1f%%) • Temp=%.1f°C • CAN Drops=%d • Free=%.0fMB",
-                  sh.loopMedianMs(),
-                  sh.loopP99Ms(),
-                  sh.totalCpuPct(),
-                  sh.javaProcessCpuPct(),
-                  sh.visionDaemonCpuPct(),
-                  sh.cpuTempC(),
+                  "Loop p50=%s / p99=%s • CPU=%s (Java %s / Vision %s) • Temp=%s • CAN Drops=%d • Free=%s",
+                  fmtFinite(sh.loopMedianMs(), "%.2fms", "NOT MEASURED"),
+                  fmtFinite(sh.loopP99Ms(), "%.2fms", "NOT MEASURED"),
+                  fmtFinite(sh.totalCpuPct(), "%.1f%%", "NOT MEASURED"),
+                  fmtFinite(sh.javaProcessCpuPct(), "%.1f%%", "NOT MEASURED"),
+                  fmtFinite(sh.visionDaemonCpuPct(), "%.1f%%", "NOT MEASURED"),
+                  fmtFinite(sh.cpuTempC(), "%.1f°C", "NOT MEASURED"),
                   sh.socketCanDropsAndOverruns(),
-                  sh.freeStorageMb()))
+                  fmtFinite(sh.freeStorageMb(), "%.0fMB", "NOT MEASURED")))
           .append("</span></h2>\n");
       if (sh.watchDecisions().isEmpty()) {
         sb.append(
@@ -946,14 +949,14 @@ public final class HtmlReportGenerator {
       csv.append(
           String.format(
               Locale.US,
-              "%s,%s,%s,%s,%s,%.1f,%.2f,%.0f,%.2f,%d,%.1f,%.2f,%d,%s\n",
+              "%s,%s,%s,%s,%s,%s,%s,%.0f,%.2f,%d,%.1f,%.2f,%d,%s\n",
               csvQuote(r.runId()),
               csvQuote(r.robotName()),
               csvQuote(r.matchType()),
               csvQuote(r.allianceStation()),
               csvQuote(b.batteryName()),
-              b.estimatedRintMilliOhms(),
-              b.minVoltage(),
+              fmtFinite(b.estimatedRintMilliOhms(), "%.1f", "NO_DATA"),
+              fmtFinite(b.minVoltage(), "%.2f", "NO_DATA"),
               b.peakDriveStatorAmps(),
               b.brownoutCriticalSeconds(),
               b.enableDropouts(),
@@ -972,12 +975,12 @@ public final class HtmlReportGenerator {
       bcsv.append(
           String.format(
               Locale.US,
-              "%s,%s,%.2f,%.2f,%.1f,%.0f,%d,%s\n",
+              "%s,%s,%s,%s,%s,%.0f,%d,%s\n",
               csvQuote(b.batteryName()),
               csvQuote(r.runId()),
-              b.restingVoltage(),
-              b.minVoltage(),
-              b.estimatedRintMilliOhms(),
+              fmtFinite(b.restingVoltage(), "%.2f", "NO_DATA"),
+              fmtFinite(b.minVoltage(), "%.2f", "NO_DATA"),
+              fmtFinite(b.estimatedRintMilliOhms(), "%.1f", "NO_DATA"),
               b.peakSupplyCurrentAmps(),
               b.enableDropouts(),
               csvQuote(b.healthGrade())));
@@ -1050,10 +1053,10 @@ public final class HtmlReportGenerator {
           .append(esc(b.batteryName()))
           .append("</td>\n")
           .append("          <td><strong>")
-          .append(String.format(Locale.US, "%.1f mΩ", b.estimatedRintMilliOhms()))
+          .append(fmtFinite(b.estimatedRintMilliOhms(), "%.1f mΩ", "NO DATA"))
           .append("</strong></td>\n")
           .append("          <td>")
-          .append(String.format(Locale.US, "%.2f V", b.minVoltage()))
+          .append(fmtFinite(b.minVoltage(), "%.2f V", "N/A"))
           .append("</td>\n")
           .append("          <td>")
           .append(String.format(Locale.US, "%.0f A", b.peakDriveStatorAmps()))
@@ -1088,6 +1091,10 @@ public final class HtmlReportGenerator {
     }
     html.append("      </tbody>\n    </table>\n  </div>\n</div>\n</body>\n</html>\n");
     Files.writeString(outDir.resolve("runs-index.html"), html.toString(), StandardCharsets.UTF_8);
+  }
+
+  private static String fmtFinite(double val, String format, String fallback) {
+    return Double.isFinite(val) ? String.format(Locale.US, format, val) : fallback;
   }
 
   private static String kpiCard(String label, String val, String sub) {

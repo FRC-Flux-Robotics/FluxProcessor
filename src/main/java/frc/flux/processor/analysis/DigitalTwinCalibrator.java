@@ -158,6 +158,9 @@ public final class DigitalTwinCalibrator {
         int currentYear = LocalDate.now().getYear();
 
         for (RunAnalysisReport.BatteryMetrics bm : batteryMap.values()) {
+          if (!Double.isFinite(bm.estimatedRintMilliOhms())) {
+            continue;
+          }
           double clampedNominal = Math.max(8.0, Math.min(35.0, round1(bm.estimatedRintMilliOhms())));
           int existingIdx = -1;
           for (int i = 0; i < currentBatteries.size(); i++) {

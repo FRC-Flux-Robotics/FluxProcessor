@@ -48,29 +48,32 @@ public final class SystemHealthWatchAnalyzer {
     }
 
     FluxSystemSnapshot parsed = FluxSystemSnapshot.parse(hasSnapshot ? rawText : "");
-    boolean hasFreeStorageKey = hasSnapshot && rawText.contains("freeStorageMb=");
+    boolean hasFreeStorageKey = hasSnapshot && Double.isFinite(parsed.freeStorageMb());
 
     String defaultController = inferControllerFromLogs(allLogs);
     String controllerType =
-        hasSnapshot
+        hasSnapshot && !"UNKNOWN".equalsIgnoreCase(parsed.controllerType())
             ? parsed.controllerType()
-            : defaultController + " (WPILOG-ONLY)";
+            : defaultController + (hasSnapshot ? "" : " (WPILOG-ONLY)");
     boolean isRoboRio = controllerType.toUpperCase(Locale.ROOT).contains("ROBORIO");
     double defaultPeriod = isRoboRio ? 20.0 : 5.0;
     double loopPeriodMs =
-        hasSnapshot && rawText.contains("loopPeriodMs=") ? parsed.loopPeriodMs() : defaultPeriod;
-    double driveTraceMaxMs = Math.max(wpiDriveMaxMs, parsed.driveTraceMaxMs());
-    double visionTraceMaxMs = Math.max(wpiVisionMaxMs, parsed.visionTraceMaxMs());
-    double superTraceMaxMs = Math.max(wpiSuperMaxMs, parsed.superstructureTraceMaxMs());
+        hasSnapshot && Double.isFinite(parsed.loopPeriodMs())
+            ? parsed.loopPeriodMs()
+            : defaultPeriod;
+    double driveTraceMaxMs = finitePositiveMax(wpiDriveMaxMs, parsed.driveTraceMaxMs());
+    double visionTraceMaxMs = finitePositiveMax(wpiVisionMaxMs, parsed.visionTraceMaxMs());
+    double superTraceMaxMs = finitePositiveMax(wpiSuperMaxMs, parsed.superstructureTraceMaxMs());
+    double wpiLoopSum =
+        (wpiDriveMaxMs > 0.0 ? wpiDriveMaxMs : 0.0)
+            + (wpiVisionMaxMs > 0.0 ? wpiVisionMaxMs : 0.0)
+            + (wpiSuperMaxMs > 0.0 ? wpiSuperMaxMs : 0.0);
     double loopMaxMs =
-        hasSnapshot && rawText.contains("loopMaxMs=")
+        hasSnapshot && Double.isFinite(parsed.loopMaxMs())
             ? parsed.loopMaxMs()
-            : Math.max(wpiDriveMaxMs + wpiVisionMaxMs + wpiSuperMaxMs, 0.0);
-    double cpuTempC = Math.max(wpiCpuTempC, parsed.cpuTempC());
-    double cpuFreqMHz =
-        hasSnapshot
-            ? (rawText.contains("cpuFreqMHz=") ? parsed.cpuFreqMHz() : (isRoboRio ? 667.0 : 2400.0))
-            : 0.0;
+            : (wpiLoopSum > 0.0 ? wpiLoopSum : Double.NaN);
+    double cpuTempC = finitePositiveMax(wpiCpuTempC, parsed.cpuTempC());
+    double cpuFreqMHz = hasSnapshot ? parsed.cpuFreqMHz() : Double.NaN;
 
     FluxSystemSnapshot merged =
         hasSnapshot
@@ -112,39 +115,39 @@ public final class SystemHealthWatchAnalyzer {
                 parsed.canInterfaces())
             : new FluxSystemSnapshot(
                 controllerType,
-                "unknown",
-                "unknown",
-                0.0,
+                "NOT MEASURED",
+                "NOT MEASURED",
+                Double.NaN,
                 loopPeriodMs,
-                0.0,
-                0.0,
+                Double.NaN,
+                Double.NaN,
                 loopMaxMs,
-                0.0,
-                0.0,
+                Double.NaN,
+                Double.NaN,
                 driveTraceMaxMs,
                 visionTraceMaxMs,
                 superTraceMaxMs,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0L,
-                0L,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                -1L,
+                -1L,
                 cpuTempC,
-                0.0,
-                0,
-                0.0,
-                0,
-                0.0,
-                0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0.0,
-                0L,
+                Double.NaN,
+                -1,
+                Double.NaN,
+                -1,
+                Double.NaN,
+                -1,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                Double.NaN,
+                -1L,
                 Collections.emptyList());
 
     List<FluxSystemSnapshot.WatchDecision> rawDecisions =
@@ -193,6 +196,21 @@ public final class SystemHealthWatchAnalyzer {
         merged.ipc(),
         merged.llcMissPct(),
         Collections.unmodifiableList(decisions));
+  }
+
+  private static double finitePositiveMax(double wpiVal, double snapVal) {
+    boolean hasWpi = Double.isFinite(wpiVal) && wpiVal > 0.0;
+    boolean hasSnap = Double.isFinite(snapVal);
+    if (hasWpi && hasSnap) {
+      return Math.max(wpiVal, snapVal);
+    }
+    if (hasWpi) {
+      return wpiVal;
+    }
+    if (hasSnap) {
+      return snapVal;
+    }
+    return Double.NaN;
   }
 
   private static String inferControllerFromLogs(List<ParsedLog> allLogs) {

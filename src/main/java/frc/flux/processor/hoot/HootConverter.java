@@ -92,9 +92,10 @@ public final class HootConverter {
       return produced;
     }
     List<Path> hootFiles;
-    try (Stream<Path> s = Files.list(runDir)) {
+    try (Stream<Path> s = Files.walk(runDir)) {
       hootFiles =
-          s.filter(
+          s.filter(Files::isRegularFile)
+              .filter(
                   p -> p.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".hoot"))
               .sorted()
               .toList();
@@ -108,8 +109,18 @@ public final class HootConverter {
     for (Path hoot : hootFiles) {
       String fileName = hoot.getFileName().toString();
       String baseName = fileName.substring(0, fileName.length() - 5);
-      Path existingInRunDir = runDir.resolve(baseName + ".wpilog");
-      Path outWpilog = targetOutDir.resolve(baseName + ".wpilog");
+      Path relHoot = runDir.relativize(hoot);
+      String outBaseName;
+      if (relHoot.getParent() != null) {
+        String parentPrefix =
+            relHoot.getParent().toString().replace('\\', '_').replace('/', '_');
+        outBaseName = parentPrefix + "_" + baseName;
+      } else {
+        outBaseName = baseName;
+      }
+      Path existingInSameDir = hoot.getParent().resolve(baseName + ".wpilog");
+      Path existingInRunDir = runDir.resolve(outBaseName + ".wpilog");
+      Path outWpilog = targetOutDir.resolve(outBaseName + ".wpilog");
 
       if (Files.exists(outWpilog) && Files.size(outWpilog) > 1000) {
         produced.add(outWpilog);
@@ -117,6 +128,10 @@ public final class HootConverter {
       }
       if (Files.exists(existingInRunDir) && Files.size(existingInRunDir) > 1000) {
         produced.add(existingInRunDir);
+        continue;
+      }
+      if (Files.exists(existingInSameDir) && Files.size(existingInSameDir) > 1000) {
+        produced.add(existingInSameDir);
         continue;
       }
       if (owlet == null) {
