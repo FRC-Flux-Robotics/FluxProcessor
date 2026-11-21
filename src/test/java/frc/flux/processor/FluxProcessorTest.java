@@ -82,7 +82,8 @@ public final class FluxProcessorTest {
       testMcpServerMultimodalTools();
       testStudentAutoVideoRendererCli();
       testBinaryAudioEmptyBatteryNoDataAndRecursiveHootDiscovery();
-      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (11/11)");
+      testRoboRioTotalLoopAndTraceTopicAlignment();
+      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (12/12)");
     } finally {
       cleanupTempDirs();
     }
@@ -911,6 +912,71 @@ public final class FluxProcessorTest {
     assertTrue(
         zipHtml.contains("ROBORIO") && zipHtml.contains("NOT MEASURED"),
         "FluxProcessor report preserves truthful ROBORIO snapshot with NOT MEASURED absent fields");
+  }
+
+  public static void testRoboRioTotalLoopAndTraceTopicAlignment() throws Exception {
+    Path runDir = createTempDir("flux-roborio-timing");
+    Files.writeString(
+        runDir.resolve("system-snapshot.txt"),
+        """
+        [PLATFORM]
+        controllerType=ROBORIO
+        hostname=roboRIO-10413-FRC
+        [CPU_AND_IRQ]
+        totalCpuPct=44.0
+        javaProcessCpuPct=32.0
+        [STORAGE]
+        internalFreeStorageMb=130.0
+        usbFreeStorageMb=12000.0
+        freeStorageMb=130.0
+        """,
+        StandardCharsets.UTF_8);
+
+    try (Writer w = new Writer(runDir.resolve("roborio_fuel.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/SystemStats/BatteryVoltage", "double", "", 0L);
+      int eTotal = w.startEntry("/RealOutputs/Performance/TotalLoopMs", "double", "", 0L);
+      int ePhoenix = w.startEntry("/RealOutputs/Performance/PhoenixSignalsMs", "double", "", 0L);
+      int eSched = w.startEntry("/RealOutputs/Performance/CommandSchedulerMs", "double", "", 0L);
+      int eContainer = w.startEntry("/RealOutputs/Performance/RobotContainerMs", "double", "", 0L);
+
+      for (int i = 1; i <= 50; i++) {
+        long tsUs = i * 20_000L;
+        w.appendBoolean(eEnable, tsUs, true);
+        w.appendDouble(eVolt, tsUs, 12.2);
+        double totalMs = (i == 49 || i == 50) ? 26.5 : 8.0;
+        w.appendDouble(eTotal, tsUs, totalMs);
+        w.appendDouble(ePhoenix, tsUs, (i == 49) ? 9.5 : 1.4);
+        w.appendDouble(eSched, tsUs, 3.2);
+        w.appendDouble(eContainer, tsUs, 0.9);
+      }
+    }
+
+    RunAnalysisReport report = RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+    assertTrue(report.systemHealth() != null, "Expected roboRIO systemHealth populated");
+    assertTrue(
+        Math.abs(report.systemHealth().loopMedianMs() - 8.0) < 0.2,
+        "Expected loopMedianMs ~8.0ms from Performance/TotalLoopMs, got "
+            + report.systemHealth().loopMedianMs());
+    assertTrue(
+        report.systemHealth().loopP99Ms() > 20.0 && report.systemHealth().loopMaxMs() >= 26.5,
+        "Expected Performance/TotalLoopMs overrun in p99/max: p99="
+            + report.systemHealth().loopP99Ms()
+            + ", max="
+            + report.systemHealth().loopMaxMs());
+    assertTrue(
+        report.systemHealth().watchDecisions().stream()
+            .anyMatch(d -> d.metricName().contains("Loop Period Jitter")),
+        "Expected roboRIO Loop Period Jitter alert: " + report.systemHealth().watchDecisions());
+    assertTrue(
+        report.systemHealth().watchDecisions().stream()
+            .anyMatch(d -> d.metricName().contains("PhoenixSignalsMs")),
+        "Expected roboRIO PhoenixSignalsMs alert: " + report.systemHealth().watchDecisions());
+    assertTrue(
+        report.systemHealth().watchDecisions().stream()
+            .anyMatch(d -> d.category().contains("Storage") && "CRITICAL".equals(d.severity())),
+        "Expected CRITICAL /home/lvuser low storage alert: "
+            + report.systemHealth().watchDecisions());
   }
 
   private static Path createSampleFluxFigDirectory() throws Exception {

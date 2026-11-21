@@ -18,8 +18,10 @@ import java.util.stream.Stream;
 /**
  * Offline evaluator for SystemCore / roboRIO watch metrics combining {@code system-snapshot.txt}
  * (when pulled over SSH by {@code FluxTray.jar} or {@code pull-logs.bat}) with {@code .wpilog}
- * timing and {@code SystemStats} topics via the shared {@link FluxSystemSnapshot} engine in {@code
- * FluxFig}.
+ * timing ({@code Performance/TotalLoopMs}, {@code Performance/PhoenixSignalsMs}, {@code
+ * Performance/CommandSchedulerMs}, {@code Performance/RobotContainerMs}, plus SystemCore {@code
+ * Performance/{Drive,Vision,Superstructure}Ms}) and {@code SystemStats} topics via the shared
+ * {@link FluxSystemSnapshot} engine in {@code FluxFig}.
  */
 public final class SystemHealthWatchAnalyzer {
 
@@ -36,6 +38,24 @@ public final class SystemHealthWatchAnalyzer {
       }
     }
 
+    List<Double> totalLoopSamples =
+        samplesFromTopicSuffix(allLogs, "Performance/TotalLoopMs", t0Us, windowEndUs);
+    double wpiLoopMedianMs = percentile(totalLoopSamples, 0.50);
+    double wpiLoopP99Ms = percentile(totalLoopSamples, 0.99);
+    double wpiTotalLoopMaxMs = maxOf(totalLoopSamples);
+    double wpiFirstEnablePeakMs =
+        firstEnableUs > 0L
+            ? maxFromTopicSuffix(
+                allLogs, "Performance/TotalLoopMs", firstEnableUs, firstEnableUs + 500_000L)
+            : 0.0;
+
+    double wpiPhoenixSignalsMaxMs =
+        maxFromTopicSuffix(allLogs, "Performance/PhoenixSignalsMs", t0Us, windowEndUs);
+    double wpiCommandSchedulerMaxMs =
+        maxFromTopicSuffix(allLogs, "Performance/CommandSchedulerMs", t0Us, windowEndUs);
+    double wpiRobotContainerMaxMs =
+        maxFromTopicSuffix(allLogs, "Performance/RobotContainerMs", t0Us, windowEndUs);
+
     double wpiDriveMaxMs = maxFromTopicSuffix(allLogs, "Performance/DriveMs", t0Us, windowEndUs);
     double wpiVisionMaxMs = maxFromTopicSuffix(allLogs, "Performance/VisionMs", t0Us, windowEndUs);
     double wpiSuperMaxMs =
@@ -43,12 +63,25 @@ public final class SystemHealthWatchAnalyzer {
     double wpiCpuTempC = maxFromTopicSuffix(allLogs, "CPUTemp", t0Us, windowEndUs);
 
     boolean hasSnapshot = rawText != null && !rawText.isBlank();
-    if (!hasSnapshot && wpiDriveMaxMs <= 0.0 && wpiVisionMaxMs <= 0.0 && wpiCpuTempC <= 0.0) {
+    boolean hasWpiTiming =
+        Double.isFinite(wpiTotalLoopMaxMs)
+            || wpiPhoenixSignalsMaxMs > 0.0
+            || wpiCommandSchedulerMaxMs > 0.0
+            || wpiRobotContainerMaxMs > 0.0
+            || wpiDriveMaxMs > 0.0
+            || wpiVisionMaxMs > 0.0
+            || wpiSuperMaxMs > 0.0
+            || wpiCpuTempC > 0.0;
+    if (!hasSnapshot && !hasWpiTiming) {
       return null;
     }
 
     FluxSystemSnapshot parsed = FluxSystemSnapshot.parse(hasSnapshot ? rawText : "");
-    boolean hasFreeStorageKey = hasSnapshot && Double.isFinite(parsed.freeStorageMb());
+    boolean hasFreeStorageKey =
+        hasSnapshot
+            && (Double.isFinite(parsed.freeStorageMb())
+                || Double.isFinite(parsed.internalFreeStorageMb())
+                || Double.isFinite(parsed.usbFreeStorageMb()));
 
     String defaultController = inferControllerFromLogs(allLogs);
     String controllerType =
@@ -64,14 +97,30 @@ public final class SystemHealthWatchAnalyzer {
     double driveTraceMaxMs = finitePositiveMax(wpiDriveMaxMs, parsed.driveTraceMaxMs());
     double visionTraceMaxMs = finitePositiveMax(wpiVisionMaxMs, parsed.visionTraceMaxMs());
     double superTraceMaxMs = finitePositiveMax(wpiSuperMaxMs, parsed.superstructureTraceMaxMs());
+    double phoenixSignalsTraceMaxMs =
+        finitePositiveMax(wpiPhoenixSignalsMaxMs, parsed.phoenixSignalsTraceMaxMs());
+    double commandSchedulerTraceMaxMs =
+        finitePositiveMax(wpiCommandSchedulerMaxMs, parsed.commandSchedulerTraceMaxMs());
+    double robotContainerTraceMaxMs =
+        finitePositiveMax(wpiRobotContainerMaxMs, parsed.robotContainerTraceMaxMs());
     double wpiLoopSum =
         (wpiDriveMaxMs > 0.0 ? wpiDriveMaxMs : 0.0)
             + (wpiVisionMaxMs > 0.0 ? wpiVisionMaxMs : 0.0)
             + (wpiSuperMaxMs > 0.0 ? wpiSuperMaxMs : 0.0);
-    double loopMaxMs =
-        hasSnapshot && Double.isFinite(parsed.loopMaxMs())
-            ? parsed.loopMaxMs()
-            : (wpiLoopSum > 0.0 ? wpiLoopSum : Double.NaN);
+    double wpiRioTraceSum =
+        (wpiPhoenixSignalsMaxMs > 0.0 ? wpiPhoenixSignalsMaxMs : 0.0)
+            + (wpiCommandSchedulerMaxMs > 0.0 ? wpiCommandSchedulerMaxMs : 0.0)
+            + (wpiRobotContainerMaxMs > 0.0 ? wpiRobotContainerMaxMs : 0.0);
+    double fallbackWpiLoopMax =
+        Double.isFinite(wpiTotalLoopMaxMs)
+            ? wpiTotalLoopMaxMs
+            : (wpiRioTraceSum > 0.0
+                ? wpiRioTraceSum
+                : (wpiLoopSum > 0.0 ? wpiLoopSum : Double.NaN));
+    double loopMedianMs = finitePositiveMax(wpiLoopMedianMs, parsed.loopMedianMs());
+    double loopP99Ms = finitePositiveMax(wpiLoopP99Ms, parsed.loopP99Ms());
+    double loopMaxMs = finitePositiveMax(fallbackWpiLoopMax, parsed.loopMaxMs());
+    double firstEnablePeakMs = finitePositiveMax(wpiFirstEnablePeakMs, parsed.firstEnablePeakMs());
     double cpuTempC = finitePositiveMax(wpiCpuTempC, parsed.cpuTempC());
     double cpuFreqMHz = hasSnapshot ? parsed.cpuFreqMHz() : Double.NaN;
 
@@ -83,10 +132,10 @@ public final class SystemHealthWatchAnalyzer {
                 parsed.kernelVersion(),
                 parsed.uptimeSec(),
                 loopPeriodMs,
-                parsed.loopMedianMs(),
-                parsed.loopP99Ms(),
+                loopMedianMs,
+                loopP99Ms,
                 loopMaxMs,
-                parsed.firstEnablePeakMs(),
+                firstEnablePeakMs,
                 parsed.odometryJitterMaxMs(),
                 driveTraceMaxMs,
                 visionTraceMaxMs,
@@ -112,17 +161,22 @@ public final class SystemHealthWatchAnalyzer {
                 parsed.l1dCacheMissPct(),
                 parsed.llcMissPct(),
                 parsed.involuntaryContextSwitches(),
-                parsed.canInterfaces())
+                parsed.canInterfaces(),
+                phoenixSignalsTraceMaxMs,
+                commandSchedulerTraceMaxMs,
+                robotContainerTraceMaxMs,
+                parsed.internalFreeStorageMb(),
+                parsed.usbFreeStorageMb())
             : new FluxSystemSnapshot(
                 controllerType,
                 "NOT MEASURED",
                 "NOT MEASURED",
                 Double.NaN,
                 loopPeriodMs,
-                Double.NaN,
-                Double.NaN,
+                loopMedianMs,
+                loopP99Ms,
                 loopMaxMs,
-                Double.NaN,
+                firstEnablePeakMs,
                 Double.NaN,
                 driveTraceMaxMs,
                 visionTraceMaxMs,
@@ -148,7 +202,12 @@ public final class SystemHealthWatchAnalyzer {
                 Double.NaN,
                 Double.NaN,
                 -1L,
-                Collections.emptyList());
+                Collections.emptyList(),
+                phoenixSignalsTraceMaxMs,
+                commandSchedulerTraceMaxMs,
+                robotContainerTraceMaxMs,
+                Double.NaN,
+                Double.NaN);
 
     List<FluxSystemSnapshot.WatchDecision> rawDecisions =
         FluxSystemSnapshot.evaluate(merged, hasSnapshot, hasFreeStorageKey);
@@ -246,6 +305,40 @@ public final class SystemHealthWatchAnalyzer {
     }
   }
 
+  private static List<Double> samplesFromTopicSuffix(
+      List<ParsedLog> allLogs, String suffix, long t0Us, long windowEndUs) {
+    List<Double> values = new ArrayList<>();
+    for (ParsedLog log : allLogs) {
+      for (String topic : log.entriesByName().keySet()) {
+        if (topic.endsWith(suffix)) {
+          for (DoubleSample s : log.getDoubleSeries(topic)) {
+            if (s.timestampUs() >= t0Us
+                && s.timestampUs() <= windowEndUs
+                && Double.isFinite(s.value())
+                && s.value() >= 0.0) {
+              values.add(s.value());
+            }
+          }
+        }
+      }
+    }
+    Collections.sort(values);
+    return values;
+  }
+
+  private static double percentile(List<Double> sortedValues, double p) {
+    if (sortedValues.isEmpty()) {
+      return Double.NaN;
+    }
+    int idx = (int) Math.ceil(p * sortedValues.size()) - 1;
+    idx = Math.max(0, Math.min(sortedValues.size() - 1, idx));
+    return sortedValues.get(idx);
+  }
+
+  private static double maxOf(List<Double> sortedValues) {
+    return sortedValues.isEmpty() ? Double.NaN : sortedValues.get(sortedValues.size() - 1);
+  }
+
   private static double maxFromTopicSuffix(
       List<ParsedLog> allLogs, String suffix, long t0Us, long windowEndUs) {
     double max = 0.0;
@@ -253,7 +346,10 @@ public final class SystemHealthWatchAnalyzer {
       for (String topic : log.entriesByName().keySet()) {
         if (topic.endsWith(suffix)) {
           for (DoubleSample s : log.getDoubleSeries(topic)) {
-            if (s.timestampUs() >= t0Us && s.timestampUs() <= windowEndUs && s.value() > max) {
+            if (s.timestampUs() >= t0Us
+                && s.timestampUs() <= windowEndUs
+                && Double.isFinite(s.value())
+                && s.value() > max) {
               max = s.value();
             }
           }

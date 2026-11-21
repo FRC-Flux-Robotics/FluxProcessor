@@ -625,8 +625,25 @@ public final class HtmlReportGenerator {
                   fmtFinite(sh.freeStorageMb(), "%.0fMB", "NOT MEASURED")))
           .append("</span></h2>\n");
       if (sh.watchDecisions().isEmpty()) {
-        sb.append(
-            "    <div style=\"font-size:13px;color:#166534;font-weight:600;\">All offline SystemCore / Controller watch metrics are within nominal thresholds (0 warnings).</div>\n");
+        boolean hasAnyMeasuredMetric =
+            Double.isFinite(sh.loopMedianMs())
+                || Double.isFinite(sh.loopP99Ms())
+                || Double.isFinite(sh.loopMaxMs())
+                || Double.isFinite(sh.totalCpuPct())
+                || Double.isFinite(sh.javaProcessCpuPct())
+                || Double.isFinite(sh.cpuTempC())
+                || Double.isFinite(sh.freeStorageMb());
+        if (!hasAnyMeasuredMetric) {
+          sb.append(
+              "    <div style=\"font-size:13px;color:var(--muted);font-weight:600;\">No controller watch metrics were captured in this run (NOT MEASURED).</div>\n");
+        } else if (sh.controllerType() != null
+            && sh.controllerType().toUpperCase(Locale.ROOT).contains("ROBORIO")) {
+          sb.append(
+              "    <div style=\"font-size:13px;color:#166534;font-weight:600;\">Measured roboRIO watch metrics are within nominal thresholds (0 warnings; SystemCore-only thermal/PMU fields are N/A).</div>\n");
+        } else {
+          sb.append(
+              "    <div style=\"font-size:13px;color:#166534;font-weight:600;\">All offline SystemCore / Controller watch metrics are within nominal thresholds (0 warnings).</div>\n");
+        }
       } else {
         sb.append("    <table>\n")
             .append(
