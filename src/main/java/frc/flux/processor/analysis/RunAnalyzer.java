@@ -4,6 +4,7 @@ import frc.flux.processor.model.RobotProfile;
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
 import frc.flux.processor.model.RunAnalysisReport.CameraSnapshotRef;
+import frc.flux.processor.model.RunAnalysisReport.CandidateTuningReview;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ElevatorCycleEvent;
 import frc.flux.processor.model.RunAnalysisReport.FuelSimMetrics;
@@ -17,6 +18,7 @@ import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
 import frc.lib.fluxfig.FluxWpiLogCodec;
 import frc.lib.fluxfig.FluxWpiLogCodec.BooleanSample;
 import frc.lib.fluxfig.FluxWpiLogCodec.DoubleSample;
+import frc.lib.fluxfig.FluxWpiLogCodec.LongSample;
 import frc.lib.fluxfig.FluxWpiLogCodec.ParsedLog;
 import frc.lib.fluxfig.FluxWpiLogCodec.StringSample;
 import java.io.IOException;
@@ -57,7 +59,7 @@ public final class RunAnalyzer {
   /** Analyzes a directory containing {@code .wpilog} files (and optional {@code run-meta.json}). */
   public static RunAnalysisReport analyzeRunDirectory(
       Path runDir, RobotProfile profile, boolean writeMergedWpilog) throws IOException {
-    return analyzeRunDirectory(runDir, runDir, profile, writeMergedWpilog);
+    return analyzeRunDirectory(runDir, runDir, runDir, null, profile, writeMergedWpilog);
   }
 
   /**
@@ -67,6 +69,22 @@ public final class RunAnalyzer {
    */
   public static RunAnalysisReport analyzeRunDirectory(
       Path runDir, Path outRunDir, RobotProfile profile, boolean writeMergedWpilog)
+      throws IOException {
+    return analyzeRunDirectory(runDir, outRunDir, runDir, null, profile, writeMergedWpilog);
+  }
+
+  /**
+   * Full run analysis overload accepting {@code inputRoot} (for archive-root {@code
+   * tuned-snapshot.txt} discovery) and optional {@code configDir} (for {@code STABLE} baseline
+   * diffing and {@code fluxfig.jar promote} CLI generation).
+   */
+  public static RunAnalysisReport analyzeRunDirectory(
+      Path runDir,
+      Path outRunDir,
+      Path inputRoot,
+      Path configDir,
+      RobotProfile profile,
+      boolean writeMergedWpilog)
       throws IOException {
     List<Path> wpilogs = discoverWpilogFiles(runDir, outRunDir);
     if (wpilogs.isEmpty()) {
@@ -114,8 +132,9 @@ public final class RunAnalyzer {
       }
     }
 
+    int enableDropouts = countEnableDropouts(win, timeline, allLogs, rioLog);
     BatteryMetrics battery =
-        BatteryAnalyzer.analyze(meta.namedBattery(), timeline, win.enableDropouts());
+        BatteryAnalyzer.analyze(meta.namedBattery(), timeline, enableDropouts);
     List<CornerMetrics> swerveCorners =
         SwerveSymmetryAnalyzer.analyze(profile, allLogs, driveLog, win.t0Us(), win.windowEndUs());
     List<MechanismMetrics> mechanisms =
@@ -158,6 +177,20 @@ public final class RunAnalyzer {
     String overallVerdict =
         evaluateVerdictAndAlerts(
             battery, swerveCorners, mechanisms, shopStressGate, systemHealth, alerts);
+
+    CandidateTuningReview candidateTuning =
+        CandidateTuningAnalyzer.analyze(
+            runDir,
+            outRunDir,
+            inputRoot,
+            configDir,
+            profile.robotName(),
+            allLogs,
+            battery,
+            swerveCorners,
+            mechanisms,
+            shopStressGate,
+            systemHealth);
 
     FuelSimMetrics fuelSimMetrics = null;
     if (writeMergedWpilog) {
@@ -209,7 +242,8 @@ public final class RunAnalyzer {
         shopStressGate,
         elevatorCycles,
         cameraSnapshots,
-        fuelSimMetrics);
+        fuelSimMetrics,
+        candidateTuning);
   }
 
   private record MatchWindowContext(
@@ -217,6 +251,7 @@ public final class RunAnalyzer {
       boolean isFms,
       String matchType,
       List<BooleanSample> enableSeries,
+      List<long[]> clusterIntervals,
       long t0Us,
       long windowEndUs,
       long firstEnableUs,
@@ -351,8 +386,26 @@ public final class RunAnalyzer {
                 "DriverStation/AllianceStation",
                 "/AdvantageKit/DriverStation/AllianceStation",
                 "FMSInfo/AllianceStation"));
-    if (!alliances.isEmpty()) {
-      alliance = alliances.get(alliances.size() - 1).value();
+    if (!alliances.isEmpty() && !alliances.get(alliances.size() - 1).value().isBlank()) {
+      alliance = alliances.get(alliances.size() - 1).value().trim();
+    }
+    if ("Unknown".equals(alliance)) {
+      List<LongSample> allianceIds =
+          findIntSeries(
+              allLogs,
+              rioLog,
+              List.of(
+                  "/DriverStation/AllianceStation",
+                  "DriverStation/AllianceStation",
+                  "/AdvantageKit/DriverStation/AllianceStation"));
+      if (!allianceIds.isEmpty()) {
+        int code = (int) allianceIds.get(allianceIds.size() - 1).value();
+        if (code >= 1 && code <= 3) {
+          alliance = "Red " + code;
+        } else if (code >= 4 && code <= 6) {
+          alliance = "Blue " + (code - 3);
+        }
+      }
     }
 
     List<BooleanSample> fmsSamples =
@@ -417,8 +470,10 @@ public final class RunAnalyzer {
     int enableTransitions = 0;
     long firstEnableUs = -1;
     long lastDisableUs = -1;
+    List<long[]> clusterIntervals = new ArrayList<>();
     for (int i = clusterStartIdx; i < enableIntervals.size(); i++) {
       long[] iv = enableIntervals.get(i);
+      clusterIntervals.add(iv);
       enableTransitions++;
       if (firstEnableUs < 0) {
         firstEnableUs = iv[0];
@@ -436,19 +491,81 @@ public final class RunAnalyzer {
             ? (lastDisableUs + 5_000_000L)
             : globalMaxUs;
     double totalDurationSec = Math.max(0.0, (windowEndUs - t0Us) / 1_000_000.0);
-    int enableDropouts = Math.max(0, enableTransitions - 2);
+    int enableDropouts = isFms ? Math.max(0, enableTransitions - 2) : 0;
 
     return new MatchWindowContext(
         alliance,
         isFms,
         matchType,
         enableSeries,
+        List.copyOf(clusterIntervals),
         t0Us,
         windowEndUs,
         firstEnableUs,
         totalDurationSec,
         enabledDurationSec,
         enableDropouts);
+  }
+
+  /**
+   * Counts mid-match enable dropouts without misclassifying intentional multi-enable practice
+   * cycles as brownouts. In FMS matches, more than two enable windows (Auto + Teleop) count as
+   * dropouts; in practice/pit sessions, a short disable gap counts as a dropout only when voltage
+   * sags below {@link #BROWNOUT_WARN_VOLTS} or {@code SystemStats/BrownedOut} asserts nearby.
+   */
+  private static int countEnableDropouts(
+      MatchWindowContext win,
+      List<TimelinePoint> timeline,
+      List<ParsedLog> allLogs,
+      ParsedLog rioLog) {
+    List<long[]> intervals = win.clusterIntervals();
+    if (intervals.size() <= 1) {
+      return 0;
+    }
+    if (win.isFms()) {
+      return Math.max(0, intervals.size() - 2);
+    }
+
+    List<BooleanSample> brownoutFlags =
+        findBooleanSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/SystemStats/BrownedOut",
+                "SystemStats/BrownedOut",
+                "/AdvantageKit/SystemStats/BrownedOut"));
+
+    int dropouts = 0;
+    for (int i = 1; i < intervals.size(); i++) {
+      long disableUs = intervals.get(i - 1)[1];
+      long reEnableUs = intervals.get(i)[0];
+      double gapSec = (reEnableUs - disableUs) / 1_000_000.0;
+      if (gapSec <= 0.0 || gapSec > 5.0) {
+        continue;
+      }
+      boolean brownedOut = false;
+      for (BooleanSample bs : brownoutFlags) {
+        if (bs.value() && Math.abs(bs.timestampUs() - disableUs) <= 2_000_000L) {
+          brownedOut = true;
+          break;
+        }
+      }
+      if (!brownedOut) {
+        double disableSec = (disableUs - win.t0Us()) / 1_000_000.0;
+        for (TimelinePoint pt : timeline) {
+          if (Math.abs(pt.timeSec() - disableSec) <= 2.0
+              && Double.isFinite(pt.batteryVoltage())
+              && pt.batteryVoltage() < BROWNOUT_WARN_VOLTS) {
+            brownedOut = true;
+            break;
+          }
+        }
+      }
+      if (brownedOut) {
+        dropouts++;
+      }
+    }
+    return dropouts;
   }
 
   /** Resolves the match-window origin timestamp (`t0Us`) for MCP and timeline alignment. */
@@ -482,13 +599,18 @@ public final class RunAnalyzer {
       List<String> alerts) {
     String overallVerdict = "PASS";
 
-    if (battery.minVoltage() < BROWNOUT_CRIT_VOLTS || battery.enableDropouts() > 0) {
+    if ((Double.isFinite(battery.minVoltage()) && battery.minVoltage() < BROWNOUT_CRIT_VOLTS)
+        || battery.enableDropouts() > 0) {
       overallVerdict = "CRITICAL";
+      String minVStr =
+          Double.isFinite(battery.minVoltage())
+              ? String.format(Locale.US, "%.2f V", battery.minVoltage())
+              : "N/A";
       alerts.add(
           String.format(
               Locale.US,
-              "Battery voltage sagged to %.2f V (@ %.1fs) under %.0f A peak drive stator load (%d mid-match enable dropouts).",
-              battery.minVoltage(),
+              "Battery voltage sagged to %s (@ %.1fs) under %.0f A peak drive stator load (%d mid-match enable dropouts).",
+              minVStr,
               battery.minVoltageTimeSec(),
               battery.peakDriveStatorAmps(),
               battery.enableDropouts()));
@@ -517,15 +639,23 @@ public final class RunAnalyzer {
         if ("PASS".equals(overallVerdict)) {
           overallVerdict = "WARN";
         }
+        String limitNote =
+            c.peakDriveStatorAmps() > SwerveSymmetryAnalyzer.DRIVE_STATOR_LIMIT_AMPS
+                ? String.format(
+                    Locale.US,
+                    " [exceeds %.0f A drive stator limit]",
+                    SwerveSymmetryAnalyzer.DRIVE_STATOR_LIMIT_AMPS)
+                : "";
         alerts.add(
             String.format(
                 Locale.US,
-                "Swerve corner %s (Drive ID %d) current asymmetry %+.1f%% vs. 4-corner median (mean %.1f A, peak %.1f A).",
+                "Swerve corner %s (Drive ID %d) current asymmetry %+.1f%% vs. 4-corner median (mean %.1f A, peak %.1f A)%s.",
                 c.corner(),
                 c.driveId(),
                 c.driveAsymmetryPct(),
                 c.meanDriveStatorAmps(),
-                c.peakDriveStatorAmps()));
+                c.peakDriveStatorAmps(),
+                limitNote));
       }
     }
 
@@ -620,8 +750,24 @@ public final class RunAnalyzer {
                 "DriverStation/Mode",
                 "/AdvantageKit/DriverStation/Mode",
                 "DS:mode"));
+    List<BooleanSample> autoS =
+        findBooleanSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/DriverStation/Autonomous",
+                "DriverStation/Autonomous",
+                "/AdvantageKit/DriverStation/Autonomous"));
+    List<BooleanSample> testS =
+        findBooleanSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/DriverStation/Test",
+                "DriverStation/Test",
+                "/AdvantageKit/DriverStation/Test"));
 
-    // Resolve all available battery/supply voltage series across Phoenix 6, AdvantageKit, WPILib, and URCL
+    // Resolve all available battery/supply voltage series across Phoenix 6, AdvantageKit, WPILib, and PDH/Battery
     List<List<DoubleSample>> voltageSources = new ArrayList<>();
     addIfNonEmpty(
         voltageSources,
@@ -634,18 +780,45 @@ public final class RunAnalyzer {
                 "/AdvantageKit/SystemStats/BatteryVoltage",
                 "RobotController/BatteryVoltage",
                 "/RobotController/BatteryVoltage",
-                "PowerDistribution/Voltage",
-                "/PowerDistribution/Voltage",
-                "PDH/Voltage",
-                "PDP/Voltage",
                 "DS:batteryVoltage")));
+    addIfNonEmpty(
+        voltageSources,
+        findDoubleSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/PowerDistribution/Voltage",
+                "PowerDistribution/Voltage",
+                "/AdvantageKit/PowerDistribution/Voltage",
+                "PDH/Voltage",
+                "PDP/Voltage")));
+    addIfNonEmpty(
+        voltageSources,
+        findDoubleSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/Battery/VoltageVolts",
+                "Battery/VoltageVolts",
+                "/AdvantageKit/Battery/VoltageVolts")));
+    addIfNonEmpty(
+        voltageSources,
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/Drive/Gyro/SupplyVoltageV",
+                "Drive/Gyro/SupplyVoltageV",
+                "/AdvantageKit/Drive/Gyro/SupplyVoltageV")));
     if (profile.pigeonId() > 0) {
       addIfNonEmpty(
           voltageSources,
           findDoubleSeries(
               allLogs,
               driveLog,
-              List.of("Phoenix6/Pigeon2-" + profile.pigeonId() + "/SupplyVoltage")));
+              List.of(
+                  "Phoenix6/Pigeon2-" + profile.pigeonId() + "/SupplyVoltage",
+                  "/Phoenix6/Pigeon2-" + profile.pigeonId() + "/SupplyVoltage")));
     }
     for (RobotProfile.CornerConfig c : profile.corners().values()) {
       if (c.driveMotorId() > 0) {
@@ -654,34 +827,55 @@ public final class RunAnalyzer {
             findDoubleSeries(
                 allLogs,
                 driveLog,
-                List.of("Phoenix6/TalonFX-" + c.driveMotorId() + "/SupplyVoltage")));
-        break;
+                List.of(
+                    "Phoenix6/TalonFX-" + c.driveMotorId() + "/SupplyVoltage",
+                    "/Phoenix6/TalonFX-" + c.driveMotorId() + "/SupplyVoltage")));
+      }
+      if (c.steerMotorId() > 0) {
+        addIfNonEmpty(
+            voltageSources,
+            findDoubleSeries(
+                allLogs,
+                driveLog,
+                List.of(
+                    "Phoenix6/TalonFX-" + c.steerMotorId() + "/SupplyVoltage",
+                    "/Phoenix6/TalonFX-" + c.steerMotorId() + "/SupplyVoltage")));
       }
     }
     for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
-      if (m.isShooter() && m.motorId() > 0) {
+      if (m.motorId() > 0) {
         addIfNonEmpty(
             voltageSources,
             findDoubleSeries(
                 allLogs,
                 mechLog,
-                List.of("Phoenix6/TalonFX-" + m.motorId() + "/SupplyVoltage")));
-        break;
+                List.of(
+                    "Phoenix6/TalonFX-" + m.motorId() + "/SupplyVoltage",
+                    "/Phoenix6/TalonFX-" + m.motorId() + "/SupplyVoltage")));
       }
     }
     if (voltageSources.isEmpty()) {
-      // Fallback: scan any topic ending in BatteryVoltage, SupplyVoltage, or BusVoltage
+      // Fallback: scan any battery/supply bus voltage topic across all logs without accepting rail or applied control voltages
       for (ParsedLog log : allLogs) {
         for (Map.Entry<String, List<DoubleSample>> e : log.allDoubleSeries().entrySet()) {
           String k = e.getKey().toLowerCase(Locale.ROOT);
-          if ((k.endsWith("batteryvoltage")
+          boolean isRailOrCommand =
+              k.contains("3v3")
+                  || k.contains("5v")
+                  || k.contains("6v")
+                  || k.contains("brownoutvoltage")
+                  || k.contains("appliedvoltage")
+                  || k.contains("motorvoltage")
+                  || k.contains("commanded");
+          if (!isRailOrCommand
+              && (k.endsWith("batteryvoltage")
                   || k.endsWith("supplyvoltage")
-                  || k.endsWith("busvoltage"))
+                  || k.endsWith("supplyvoltagev")
+                  || k.endsWith("busvoltage")
+                  || k.endsWith("voltagevolts")
+                  || k.endsWith("powerdistribution/voltage"))
               && !e.getValue().isEmpty()) {
             voltageSources.add(e.getValue());
-            if (voltageSources.size() >= 3) {
-              break;
-            }
           }
         }
       }
@@ -691,8 +885,10 @@ public final class RunAnalyzer {
     List<List<DoubleSample>> driveSupplies = new ArrayList<>();
     List<List<DoubleSample>> driveVelocities = new ArrayList<>();
     List<Double> velConversionFactors = new ArrayList<>();
+    boolean wheelScalePhoenix6 = isPhoenix6DriveWheelScale(profile, allLogs);
+    double wheelCircumferenceM = 2.0 * Math.PI * profile.wheelRadiusMeters();
     double rotToMeters =
-        (1.0 / profile.driveGearRatio()) * (2.0 * Math.PI * profile.wheelRadiusMeters());
+        (1.0 / Math.max(1.0, profile.driveGearRatio())) * wheelCircumferenceM;
 
     for (RobotProfile.CornerConfig c : profile.corners().values()) {
       driveStators.add(findDoubleSeriesByTopic(allLogs, driveLog, c.driveStatorTopic()));
@@ -705,10 +901,53 @@ public final class RunAnalyzer {
         velConversionFactors.add(1.0);
       } else if (vTopicLower.contains("radpersec")) {
         velConversionFactors.add(profile.wheelRadiusMeters());
+      } else if (wheelScalePhoenix6 && vTopicLower.contains("phoenix6/talonfx")) {
+        // 2027 ModuleIOTalonFX sets SensorToMechanismRatio = driveGearRatio, so TalonFX Velocity is wheel RPS
+        velConversionFactors.add(wheelCircumferenceM);
       } else {
         velConversionFactors.add(rotToMeters);
       }
     }
+
+    List<DoubleSample> chassisVx =
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/RealOutputs/Drive/ChassisSpeeds.vx",
+                "RealOutputs/Drive/ChassisSpeeds.vx",
+                "/AdvantageKit/RealOutputs/Drive/ChassisSpeeds.vx"));
+    List<DoubleSample> chassisVy =
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/RealOutputs/Drive/ChassisSpeeds.vy",
+                "RealOutputs/Drive/ChassisSpeeds.vy",
+                "/AdvantageKit/RealOutputs/Drive/ChassisSpeeds.vy"));
+
+    List<DoubleSample> directTotalSupply =
+        findDoubleSeries(
+            allLogs,
+            rioLog,
+            List.of(
+                "/PowerDistribution/TotalCurrent",
+                "PowerDistribution/TotalCurrent",
+                "/AdvantageKit/PowerDistribution/TotalCurrent",
+                "/Battery/CurrentAmps",
+                "Battery/CurrentAmps",
+                "/AdvantageKit/Battery/CurrentAmps",
+                "/SystemStats/BatteryCurrent",
+                "SystemStats/BatteryCurrent",
+                "/AdvantageKit/SystemStats/BatteryCurrent"));
+    List<DoubleSample> driveTotalSupply =
+        findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "/RealOutputs/Drive/TotalSupplyCurrentAmps",
+                "RealOutputs/Drive/TotalSupplyCurrentAmps",
+                "/AdvantageKit/RealOutputs/Drive/TotalSupplyCurrentAmps"));
 
     // Resolve primary shooter/launcher velocity and feeder/indexer stator current from profile.mechanisms()
     RobotProfile.MechMotorSpec shooterLeader = findShooterLeader(profile);
@@ -730,6 +969,12 @@ public final class RunAnalyzer {
 
     List<TimelinePoint> points = new ArrayList<>(steps + 1);
     long halfWindowUs = Math.max(20_000L, Math.round(dt * 500_000.0));
+    int nonEmptyDriveSupplies = 0;
+    for (List<DoubleSample> s : driveSupplies) {
+      if (!s.isEmpty()) {
+        nonEmptyDriveSupplies++;
+      }
+    }
 
     for (int i = 0; i <= steps; i++) {
       double tSec = i * dt;
@@ -738,17 +983,27 @@ public final class RunAnalyzer {
       long wMaxUs = tsUs + halfWindowUs;
 
       boolean enabled = sampleBooleanAt(enableS, tsUs, false);
-      String mode = sampleStringAt(modeS, tsUs, enabled ? "Teleop" : "Disabled");
+      String fallbackMode;
+      if (!enabled) {
+        fallbackMode = "Disabled";
+      } else if (sampleBooleanAt(autoS, tsUs, false)) {
+        fallbackMode = "Auto";
+      } else if (sampleBooleanAt(testS, tsUs, false)) {
+        fallbackMode = "Test";
+      } else {
+        fallbackMode = "Teleop";
+      }
+      String mode = sampleStringAt(modeS, tsUs, fallbackMode);
 
-      double vBatt = 14.0;
+      double vBatt = Double.POSITIVE_INFINITY;
       for (List<DoubleSample> vSrc : voltageSources) {
         double vSample = minInWindowOrSample(vSrc, wMinUs, wMaxUs, tsUs, Double.NaN);
-        if (!Double.isNaN(vSample) && vSample > 3.0) {
+        if (Double.isFinite(vSample) && vSample > 3.0) {
           vBatt = Math.min(vBatt, vSample);
         }
       }
-      if (vBatt == 14.0) {
-        vBatt = 12.4;
+      if (!Double.isFinite(vBatt)) {
+        vBatt = Double.NaN;
       }
 
       double sumDriveStator = 0.0;
@@ -756,23 +1011,26 @@ public final class RunAnalyzer {
         sumDriveStator += maxAbsInWindowOrSample(s, wMinUs, wMaxUs, tsUs, 0.0);
       }
 
-      double sumSupply = 0.0;
-      for (List<DoubleSample> s : driveSupplies) {
-        sumSupply += maxAbsInWindowOrSample(s, wMinUs, wMaxUs, tsUs, 0.0);
-      }
-      // If only 2 of 4 drive motors logged SupplyCurrent in .hoot, scale proportionally
-      int nonEmptyDriveSupplies = 0;
-      for (List<DoubleSample> s : driveSupplies) {
-        if (!s.isEmpty()) {
-          nonEmptyDriveSupplies++;
+      double driveSupply = 0.0;
+      if (nonEmptyDriveSupplies > 0) {
+        for (List<DoubleSample> s : driveSupplies) {
+          driveSupply += maxAbsInWindowOrSample(s, wMinUs, wMaxUs, tsUs, 0.0);
         }
+        if (nonEmptyDriveSupplies < 4) {
+          driveSupply = driveSupply * (4.0 / nonEmptyDriveSupplies);
+        }
+      } else if (!driveTotalSupply.isEmpty()) {
+        driveSupply = maxAbsInWindowOrSample(driveTotalSupply, wMinUs, wMaxUs, tsUs, 0.0);
       }
-      if (nonEmptyDriveSupplies > 0 && nonEmptyDriveSupplies < 4) {
-        sumSupply = sumSupply * (4.0 / nonEmptyDriveSupplies);
-      }
+      double mechSupply = 0.0;
       for (List<DoubleSample> s : mechSupplies) {
-        sumSupply += maxAbsInWindowOrSample(s, wMinUs, wMaxUs, tsUs, 0.0);
+        mechSupply += maxAbsInWindowOrSample(s, wMinUs, wMaxUs, tsUs, 0.0);
       }
+      double directSupply =
+          !directTotalSupply.isEmpty()
+              ? maxAbsInWindowOrSample(directTotalSupply, wMinUs, wMaxUs, tsUs, 0.0)
+              : 0.0;
+      double sumSupply = Math.max(directSupply, driveSupply + mechSupply);
 
       double sumWheelSpeedMps = 0.0;
       int velCount = 0;
@@ -784,7 +1042,16 @@ public final class RunAnalyzer {
           velCount++;
         }
       }
-      double chassisSpeedMps = velCount > 0 ? sumWheelSpeedMps / velCount : 0.0;
+      double chassisSpeedMps;
+      if (velCount > 0) {
+        chassisSpeedMps = sumWheelSpeedMps / velCount;
+      } else if (!chassisVx.isEmpty() || !chassisVy.isEmpty()) {
+        double vx = sampleDoubleAt(chassisVx, tsUs, 0.0);
+        double vy = sampleDoubleAt(chassisVy, tsUs, 0.0);
+        chassisSpeedMps = Math.hypot(vx, vy);
+      } else {
+        chassisSpeedMps = 0.0;
+      }
 
       double sLeftRps = maxAbsInWindowOrSample(shooterLeftVel, wMinUs, wMaxUs, tsUs, 0.0);
       double fStator = maxAbsInWindowOrSample(feederStator, wMinUs, wMaxUs, tsUs, 0.0);
@@ -802,6 +1069,38 @@ public final class RunAnalyzer {
               fStator));
     }
     return points;
+  }
+
+  /**
+   * Returns {@code true} when Phoenix 6 swerve drive {@code TalonFX/Velocity} and {@code Position}
+   * signals are already in wheel rotations via {@code SensorToMechanismRatio = driveGearRatio}
+   * (2027 {@code ModuleIOTalonFX} profiles and logs), avoiding double-division by {@code
+   * driveGearRatio} while keeping legacy 2026 rotor-scale logs intact.
+   */
+  public static boolean isPhoenix6DriveWheelScale(RobotProfile profile, List<ParsedLog> allLogs) {
+    String name =
+        profile != null && profile.robotName() != null
+            ? profile.robotName().toUpperCase(Locale.ROOT)
+            : "";
+    if (name.contains("2027") || "CHASSIS_3".equals(name)) {
+      return true;
+    }
+    if ("FUEL".equals(name) || "CORAL".equals(name)) {
+      return false;
+    }
+    if (allLogs != null) {
+      for (ParsedLog log : allLogs) {
+        for (String key : log.entriesByName().keySet()) {
+          if (key.contains("RealMetadata/ConfigSHA256")
+              || key.contains("RealMetadata/RobotIdentity")
+              || key.contains("RealOutputs/FluxFig/EffectiveSnapshot")
+              || key.contains("Drive/Module0/DriveVelocityRadPerSec")) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   private static List<MechanismMetrics> analyzeMechanisms(
@@ -882,7 +1181,7 @@ public final class RunAnalyzer {
     double peakRightRps = 0.0;
     double shotHoodRot = 0.0;
     double peakFeederAmps = 0.0;
-    double minVoltDuringShot = 14.0;
+    double minVoltDuringShot = Double.POSITIVE_INFINITY;
 
     double enableOffsetSec =
         firstEnableUs > t0Us ? (firstEnableUs - t0Us) / 1_000_000.0 : 0.0;
@@ -904,19 +1203,26 @@ public final class RunAnalyzer {
           peakRightRps = sRight;
           shotHoodRot = hPos;
           peakFeederAmps = pt.feederStatorAmps();
-          minVoltDuringShot = pt.batteryVoltage();
+          minVoltDuringShot =
+              Double.isFinite(pt.batteryVoltage()) ? pt.batteryVoltage() : Double.POSITIVE_INFINITY;
         } else {
           peakLeftRps = Math.max(peakLeftRps, pt.shooterLeftRps());
           peakRightRps = Math.max(peakRightRps, sRight);
           peakFeederAmps = Math.max(peakFeederAmps, pt.feederStatorAmps());
-          minVoltDuringShot = Math.min(minVoltDuringShot, pt.batteryVoltage());
+          if (Double.isFinite(pt.batteryVoltage())) {
+            minVoltDuringShot = Math.min(minVoltDuringShot, pt.batteryVoltage());
+          }
         }
       } else if (inShot) {
         double dur = Math.max(0.2, pt.timeSec() - shotStartSec);
         int shotNum = shots.size() + 1;
         double asym = Math.abs(peakLeftRps - peakRightRps);
+        double reportedMinV =
+            Double.isFinite(minVoltDuringShot) ? minVoltDuringShot : Double.NaN;
         String status =
-            (minVoltDuringShot < 7.5 || asym > 6.0) ? "VOLTAGE SAG / ASYM" : "NOMINAL";
+            ((Double.isFinite(reportedMinV) && reportedMinV < 7.5) || asym > 6.0)
+                ? "VOLTAGE SAG / ASYM"
+                : "NOMINAL";
         String vLink =
             buildVideoJumpLink(videoUrl, videoOffsetSec, shotStartSec - enableOffsetSec);
         shots.add(
@@ -929,7 +1235,7 @@ public final class RunAnalyzer {
                 asym,
                 shotHoodRot,
                 peakFeederAmps,
-                minVoltDuringShot,
+                reportedMinV,
                 vLink,
                 status));
         inShot = false;
@@ -940,8 +1246,11 @@ public final class RunAnalyzer {
       double dur = Math.max(0.2, lastPt.timeSec() - shotStartSec);
       int shotNum = shots.size() + 1;
       double asym = Math.abs(peakLeftRps - peakRightRps);
+      double reportedMinV = Double.isFinite(minVoltDuringShot) ? minVoltDuringShot : Double.NaN;
       String status =
-          (minVoltDuringShot < 7.5 || asym > 6.0) ? "VOLTAGE SAG / ASYM" : "NOMINAL";
+          ((Double.isFinite(reportedMinV) && reportedMinV < 7.5) || asym > 6.0)
+              ? "VOLTAGE SAG / ASYM"
+              : "NOMINAL";
       String vLink =
           buildVideoJumpLink(videoUrl, videoOffsetSec, shotStartSec - enableOffsetSec);
       shots.add(
@@ -954,7 +1263,7 @@ public final class RunAnalyzer {
               asym,
               shotHoodRot,
               peakFeederAmps,
-              minVoltDuringShot,
+              reportedMinV,
               vLink,
               status));
     }
@@ -981,7 +1290,7 @@ public final class RunAnalyzer {
     // auto-detected telemetry checkpoints at key physical anomalies so the 6-second lookback
     // table demonstrates exact root-cause correlation on existing logs too.
     if (effectiveNotes.isEmpty()) {
-      if (battery.minVoltage() < 7.2) {
+      if (Double.isFinite(battery.minVoltage()) && battery.minVoltage() < 7.2) {
         effectiveNotes.add(
             new VoiceUtterance(
                 "AUTO-TELEMETRY (Driver View)",
@@ -1020,12 +1329,12 @@ public final class RunAnalyzer {
       double tStart = Math.max(0.0, tSpoken - LOOKBACK_WINDOW_SEC);
 
       // Scan [tStart .. tSpoken] in timeline, shots, elevatorCycles, and cameraSnapshots
-      double windowMinV = 14.0;
+      double windowMinV = Double.POSITIVE_INFINITY;
       double windowMinVTime = tStart;
       double windowPeakStator = 0.0;
       for (TimelinePoint pt : timeline) {
         if (pt.timeSec() >= tStart && pt.timeSec() <= tSpoken) {
-          if (pt.batteryVoltage() < windowMinV) {
+          if (Double.isFinite(pt.batteryVoltage()) && pt.batteryVoltage() < windowMinV) {
             windowMinV = pt.batteryVoltage();
             windowMinVTime = pt.timeSec();
           }
@@ -1068,15 +1377,19 @@ public final class RunAnalyzer {
                 matchedShot.shotNumber(),
                 matchedShot.timestampSec(),
                 Math.max(0.0, tSpoken - matchedShot.timestampSec()));
+        String shotBattStr =
+            Double.isFinite(matchedShot.minBatteryVoltageDuringShot())
+                ? String.format(Locale.US, "%.2f V", matchedShot.minBatteryVoltageDuringShot())
+                : "N/A";
         diagnosis =
             String.format(
                 Locale.US,
-                "Shooter L/R = %.1f / %.1f RPS (Δ=%.1f RPS), Hood = %.2f rot, Battery = %.2f V during feed (Feeder peak %.1f A).",
+                "Shooter L/R = %.1f / %.1f RPS (Δ=%.1f RPS), Hood = %.2f rot, Battery = %s during feed (Feeder peak %.1f A).",
                 matchedShot.shooterLeftRps(),
                 matchedShot.shooterRightRps(),
                 matchedShot.shooterAsymmetryRps(),
                 matchedShot.hoodPositionRot(),
-                matchedShot.minBatteryVoltageDuringShot(),
+                shotBattStr,
                 matchedShot.feederPeakStatorAmps());
         if (!"NOMINAL".equals(matchedShot.status())) {
           severity = "WARN";
@@ -1089,19 +1402,23 @@ public final class RunAnalyzer {
                 matchedElev.cycleNumber(),
                 matchedElev.targetLevel(),
                 matchedElev.startTimeSec());
+        String elevBattStr =
+            Double.isFinite(matchedElev.minBatteryVoltage())
+                ? String.format(Locale.US, "%.2f V", matchedElev.minBatteryVoltage())
+                : "N/A";
         diagnosis =
             String.format(
                 Locale.US,
-                "Peak Elevator = %.1f rot, Arm = %.2f rot, Peak Stator = %.1f A, Min Battery = %.2f V (Keep-out Interlock: %s).",
+                "Peak Elevator = %.1f rot, Arm = %.2f rot, Peak Stator = %.1f A, Min Battery = %s (Keep-out Interlock: %s).",
                 matchedElev.peakElevatorPosRot(),
                 matchedElev.peakArmPosRot(),
                 matchedElev.peakStatorAmps(),
-                matchedElev.minBatteryVoltage(),
+                elevBattStr,
                 matchedElev.keepOutInterlockTriggered() ? "TRIGGERED" : "CLEAR");
         if (!"NOMINAL".equals(matchedElev.status())) {
           severity = "WARN";
         }
-      } else if (windowMinV < 7.5) {
+      } else if (Double.isFinite(windowMinV) && windowMinV < 7.5) {
         eventSummary =
             String.format(
                 Locale.US,
@@ -1121,11 +1438,17 @@ public final class RunAnalyzer {
       } else {
         eventSummary =
             String.format(Locale.US, "Lookback Window [%.1fs .. %.1fs]", tStart, tSpoken);
+        double shownVolt =
+            Double.isFinite(windowMinV) ? windowMinV : battery.restingVoltage();
+        String voltStr =
+            Double.isFinite(shownVolt)
+                ? String.format(Locale.US, "%.2f V", shownVolt)
+                : "N/A";
         diagnosis =
             String.format(
                 Locale.US,
-                "Min voltage in 6s window = %.2f V, Peak drive stator = %.0f A.",
-                windowMinV == 14.0 ? battery.restingVoltage() : windowMinV,
+                "Min voltage in 6s window = %s, Peak drive stator = %.0f A.",
+                voltStr,
                 windowPeakStator);
       }
 
@@ -1154,17 +1477,43 @@ public final class RunAnalyzer {
     return results;
   }
 
+  /**
+   * Returns {@code true} only for safe {@code http://} or {@code https://} external video URLs,
+   * rejecting {@code javascript:}, {@code data:}, and malformed schemes.
+   */
+  public static boolean isSafeHttpUrl(String rawUrl) {
+    if (rawUrl == null) {
+      return false;
+    }
+    String trimmed = rawUrl.trim();
+    if (trimmed.isEmpty()) {
+      return false;
+    }
+    String lower = trimmed.toLowerCase(Locale.ROOT);
+    if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+      return false;
+    }
+    for (int i = 0; i < trimmed.length(); i++) {
+      char ch = trimmed.charAt(i);
+      if (ch <= 0x20 || ch == '"' || ch == '\'' || ch == '<' || ch == '>') {
+        return false;
+      }
+    }
+    return true;
+  }
+
   public static String buildVideoJumpLink(
       String videoUrl, double videoOffsetSec, double eventTimeFromEnableSec) {
-    if (videoUrl == null || videoUrl.isBlank()) {
+    if (!isSafeHttpUrl(videoUrl)) {
       return "";
     }
+    String cleanUrl = videoUrl.trim();
     int jumpSec = Math.max(0, (int) Math.floor(videoOffsetSec + eventTimeFromEnableSec - 3.0));
-    if (videoUrl.contains("youtube.com") || videoUrl.contains("youtu.be")) {
-      String sep = videoUrl.contains("?") ? "&" : "?";
-      return videoUrl + sep + "t=" + jumpSec + "s";
+    if (cleanUrl.contains("youtube.com") || cleanUrl.contains("youtu.be")) {
+      String sep = cleanUrl.contains("?") ? "&" : "?";
+      return cleanUrl + sep + "t=" + jumpSec + "s";
     }
-    return videoUrl + "#t=" + jumpSec;
+    return cleanUrl + "#t=" + jumpSec;
   }
 
   /**
@@ -1191,9 +1540,12 @@ public final class RunAnalyzer {
               List.of(
                   "/FluxAudit/NamedBattery",
                   "FluxAudit/NamedBattery",
+                  "/RealOutputs/Battery/Name",
+                  "RealOutputs/Battery/Name",
+                  "/AdvantageKit/RealOutputs/Battery/Name",
                   "/Battery/Name",
                   "Battery/Name",
-                  "/AdvantageKit/RealOutputs/Battery/Name"));
+                  "/AdvantageKit/Battery/Name"));
       if (!wpiBatt.isEmpty() && !wpiBatt.get(0).value().isBlank()) {
         battery = wpiBatt.get(0).value().trim();
       }
@@ -1202,6 +1554,9 @@ public final class RunAnalyzer {
               allLogs,
               null,
               List.of(
+                  "/RealMetadata/GitSHA",
+                  "RealMetadata/GitSHA",
+                  "/AdvantageKit/RealMetadata/GitSHA",
                   "/FluxFig/GitSHA",
                   "FluxFig/GitSHA",
                   "/AdvantageKit/RealOutputs/FluxFig/GitSHA",
@@ -1215,9 +1570,17 @@ public final class RunAnalyzer {
               allLogs,
               null,
               List.of(
+                  "/RealMetadata/ConfigSHA256",
+                  "RealMetadata/ConfigSHA256",
+                  "/AdvantageKit/RealMetadata/ConfigSHA256",
+                  "/RealOutputs/FluxFig/BootConfigSHA256",
+                  "RealOutputs/FluxFig/BootConfigSHA256",
+                  "/AdvantageKit/RealOutputs/FluxFig/BootConfigSHA256",
                   "/FluxFig/ConfigSHA256",
                   "FluxFig/ConfigSHA256",
                   "/AdvantageKit/RealOutputs/FluxFig/ConfigSHA256",
+                  "/RealOutputs/FluxFig/EffectiveVersion",
+                  "/AdvantageKit/RealOutputs/FluxFig/EffectiveVersion",
                   "/FluxFig/EffectiveVersion",
                   "FluxFig/EffectiveVersion"));
       if (!wpiCfg.isEmpty() && !wpiCfg.get(0).value().isBlank()) {
@@ -1571,6 +1934,30 @@ public final class RunAnalyzer {
       }
       for (String c : candidates) {
         List<BooleanSample> s = log.getBooleanSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    return Collections.emptyList();
+  }
+
+  public static List<LongSample> findIntSeries(
+      List<ParsedLog> allLogs, ParsedLog preferred, List<String> candidates) {
+    if (preferred != null) {
+      for (String c : candidates) {
+        List<LongSample> s = preferred.getIntSeries(c);
+        if (!s.isEmpty()) {
+          return s;
+        }
+      }
+    }
+    for (ParsedLog log : allLogs) {
+      if (log == preferred) {
+        continue;
+      }
+      for (String c : candidates) {
+        List<LongSample> s = log.getIntSeries(c);
         if (!s.isEmpty()) {
           return s;
         }

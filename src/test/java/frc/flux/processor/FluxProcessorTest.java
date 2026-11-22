@@ -83,7 +83,13 @@ public final class FluxProcessorTest {
       testStudentAutoVideoRendererCli();
       testBinaryAudioEmptyBatteryNoDataAndRecursiveHootDiscovery();
       testRoboRioTotalLoopAndTraceTopicAlignment();
-      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (12/12)");
+      testTempDirZipCleanupAndCliParsing();
+      testReal2027AdvantageKitTopicsAndSwerveModulesCsv();
+      testCandidatePracticeTuningDiffAndPromoteGate();
+      testTelemetryTruthfulnessHootScaleNoSyntheticVoltageMultiEnableAndBatteryGates();
+      testDigitalTwinCalibratorGyroSpinArmCosineR2GateAndPidProtection();
+      testHtmlReportOfflineSafeAndXssClean();
+      System.out.println("ALL FLUX PROCESSOR TESTS PASSED (18/18)");
     } finally {
       cleanupTempDirs();
     }
@@ -977,6 +983,694 @@ public final class FluxProcessorTest {
             .anyMatch(d -> d.category().contains("Storage") && "CRITICAL".equals(d.severity())),
         "Expected CRITICAL /home/lvuser low storage alert: "
             + report.systemHealth().watchDecisions());
+  }
+
+  public static void testTempDirZipCleanupAndCliParsing() throws Exception {
+    Path zipParent = createTempDir("flux-drive-sync-parent");
+    Path zipFile = zipParent.resolve("practice_2027_run.zip");
+    Path scratchLog = createTempDir("flux-zip-src").resolve("akit_2027.wpilog");
+    try (Writer w = new Writer(scratchLog, "AdvantageKit")) {
+      int eEnable = w.startEntry("/AdvantageKit/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/AdvantageKit/PowerDistribution/Voltage", "double", "", 0L);
+      for (int i = 1; i <= 15; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eVolt, ts, 12.2);
+      }
+    }
+    try (java.util.zip.ZipOutputStream zos =
+        new java.util.zip.ZipOutputStream(Files.newOutputStream(zipFile))) {
+      zos.putNextEntry(new java.util.zip.ZipEntry("akit_2027.wpilog"));
+      Files.copy(scratchLog, zos);
+      zos.closeEntry();
+    }
+
+    Path explicitOut = createTempDir("flux-zip-explicit-out");
+    int codeWithOut =
+        FluxProcessorMain.runCli(
+            new String[] {
+              zipFile.toString(), "--out", explicitOut.toString(), "--robot", "COMP_2027", "--no-merge"
+            });
+    assertTrue(codeWithOut == 0, "Expected exit code 0 for ZIP with --out");
+    assertTrue(
+        Files.isRegularFile(explicitOut.resolve("practice_2027_run").resolve("report.html")),
+        "Expected report.html written under explicit --out/<zipBaseName>");
+
+    List<Path> parentAfterWithOut;
+    try (Stream<Path> s = Files.list(zipParent)) {
+      parentAfterWithOut = s.toList();
+    }
+    assertTrue(
+        parentAfterWithOut.size() == 1 && parentAfterWithOut.get(0).equals(zipFile),
+        "ZIP parent folder must remain untouched (no *_extracted dir), found: " + parentAfterWithOut);
+
+    int codeNoOut =
+        FluxProcessorMain.runCli(
+            new String[] {zipFile.toString(), "--robot", "CHASSIS_3", "--no-merge"});
+    assertTrue(codeNoOut == 0, "Expected exit code 0 for ZIP without --out");
+
+    List<Path> parentAfterNoOut;
+    try (Stream<Path> s = Files.list(zipParent)) {
+      parentAfterNoOut = s.toList();
+    }
+    assertTrue(
+        parentAfterNoOut.size() == 1 && parentAfterNoOut.get(0).equals(zipFile),
+        "ZIP without --out must not pollute ZIP parent folder, found: " + parentAfterNoOut);
+
+    assertTrue(
+        RobotProfile.fromPresetName("COMP_2027").corners().size() == 4
+            && RobotProfile.fromPresetName("PRACTICE_2027").corners().size() == 4
+            && RobotProfile.fromPresetName("CHASSIS_3").corners().size() == 4,
+        "Built-in 2027 presets must resolve 4 swerve corners without falling into an empty profile");
+
+    Path calRunDir = createTempDir("flux-cli-calsim-run");
+    Files.copy(scratchLog, calRunDir.resolve("akit_2027.wpilog"));
+    Path calOut = createTempDir("flux-cli-calsim-out");
+    int calCode =
+        FluxProcessorMain.runCli(
+            new String[] {
+              "--calibrate-sim", calRunDir.toString(), "--out", calOut.toString(), "--no-merge"
+            });
+    assertTrue(calCode == 0, "Expected --calibrate-sim <run-dir> CLI invocation to succeed");
+    assertTrue(
+        Files.isRegularFile(calOut.resolve("sim-calibration.json")),
+        "Expected sim-calibration.json from --calibrate-sim <run-dir>");
+  }
+
+  public static void testReal2027AdvantageKitTopicsAndSwerveModulesCsv() throws Exception {
+    Path cfgDir = createSampleFluxFigDirectoryWithSwerveModules();
+    RobotProfile fromDir = RobotProfile.fromFluxFigDirectory(cfgDir, "COMP_2027");
+    assertTrue(
+        fromDir.corners().get("FL").driveMotorId() == 11
+            && fromDir.corners().get("FL").steerMotorId() == 12
+            && fromDir.corners().get("FL").cancoderId() == 31
+            && fromDir.corners().get("BR").driveMotorId() == 17,
+        "Expected swerve_modules.csv CAN IDs loaded in RobotProfile.fromFluxFigDirectory, got "
+            + fromDir.corners());
+
+    String snapshot = FluxFig.load(cfgDir, "COMP_2027").getEffectiveSnapshot();
+    Path runDir = createTempDir("flux-2027-akit-topics");
+    try (Writer w = new Writer(runDir.resolve("akit_2027_real.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/AdvantageKit/DriverStation/Enabled", "boolean", "", 0L);
+      int eSnap = w.startEntry("/AdvantageKit/RealOutputs/FluxFig/EffectiveSnapshot", "string", "", 0L);
+      int eCfgSha = w.startEntry("/RealMetadata/ConfigSHA256", "string", "", 0L);
+      int ePdhVolt = w.startEntry("/AdvantageKit/PowerDistribution/Voltage", "double", "", 0L);
+      int ePdhAmps = w.startEntry("/AdvantageKit/PowerDistribution/TotalCurrent", "double", "", 0L);
+      int eBattVolt = w.startEntry("/AdvantageKit/Battery/VoltageVolts", "double", "", 0L);
+      int eBattAmps = w.startEntry("/AdvantageKit/Battery/CurrentAmps", "double", "", 0L);
+      int eLoopMs = w.startEntry("/AdvantageKit/RealOutputs/Performance/TotalLoopMs", "double", "", 0L);
+      int eDriveSupplyTotal =
+          w.startEntry("/AdvantageKit/RealOutputs/Drive/TotalSupplyCurrentAmps", "double", "", 0L);
+      int ePose = w.startEntry("/AdvantageKit/RealOutputs/Drive/Pose", "struct:Pose2d", "", 0L);
+      int eSpeeds =
+          w.startEntry("/AdvantageKit/RealOutputs/Drive/ChassisSpeeds", "struct:ChassisSpeeds", "", 0L);
+
+      int[] eModStator = new int[4];
+      int[] eModSupply = new int[4];
+      int[] eModVel = new int[4];
+      int[] eModPos = new int[4];
+      int[] eTurnStator = new int[4];
+      for (int m = 0; m < 4; m++) {
+        eModStator[m] =
+            w.startEntry("/AdvantageKit/Drive/Module" + m + "/DriveStatorCurrentAmps", "double", "", 0L);
+        eModSupply[m] =
+            w.startEntry("/AdvantageKit/Drive/Module" + m + "/DriveSupplyCurrentAmps", "double", "", 0L);
+        eModVel[m] =
+            w.startEntry("/AdvantageKit/Drive/Module" + m + "/DriveVelocityRadPerSec", "double", "", 0L);
+        eModPos[m] =
+            w.startEntry("/AdvantageKit/Drive/Module" + m + "/DrivePositionRad", "double", "", 0L);
+        eTurnStator[m] =
+            w.startEntry("/AdvantageKit/Drive/Module" + m + "/TurnStatorCurrentAmps", "double", "", 0L);
+      }
+
+      int eElevPos = w.startEntry("/AdvantageKit/Elevator/PositionRotations", "double", "", 0L);
+      int eElevVel = w.startEntry("/AdvantageKit/Elevator/VelocityRPS", "double", "", 0L);
+      int eElevVolt = w.startEntry("/AdvantageKit/Elevator/AppliedVoltage", "double", "", 0L);
+      int eElevStator = w.startEntry("/AdvantageKit/Elevator/StatorCurrentAmps", "double", "", 0L);
+      int eElevSupply = w.startEntry("/AdvantageKit/Elevator/SupplyCurrentAmps", "double", "", 0L);
+
+      w.appendString(eSnap, 0L, snapshot);
+      w.appendString(eCfgSha, 0L, "sha2027deadbeef");
+      w.appendBoolean(eEnable, 0L, false);
+      w.appendDouble(ePdhVolt, 0L, 12.70);
+      w.appendDouble(eBattVolt, 0L, 12.70);
+
+      for (int i = 1; i <= 35; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        double iPerWheel = 10.0 + (i % 8) * 3.5;
+        double iTotal = iPerWheel * 4.0 + 12.0;
+        double vBatt = 12.70 - iTotal * 0.017;
+        w.appendDouble(ePdhVolt, ts, vBatt);
+        w.appendDouble(eBattVolt, ts, vBatt);
+        w.appendDouble(ePdhAmps, ts, iTotal);
+        w.appendDouble(eBattAmps, ts, iTotal);
+        w.appendDouble(eDriveSupplyTotal, ts, iPerWheel * 4.0);
+        w.appendDouble(eLoopMs, ts, 9.5);
+        w.appendPose2d(ePose, ts, 2.0 + i * 0.1, 4.0, 0.0);
+        w.appendChassisSpeeds(eSpeeds, ts, 3.0, 0.0, 0.0);
+        for (int m = 0; m < 4; m++) {
+          w.appendDouble(eModStator[m], ts, 42.0);
+          w.appendDouble(eModSupply[m], ts, iPerWheel);
+          w.appendDouble(eModVel[m], ts, 60.0); // 60 rad/s * 0.0508 m = 3.048 m/s
+          w.appendDouble(eModPos[m], ts, i * 12.0);
+          w.appendDouble(eTurnStator[m], ts, 8.0);
+        }
+        w.appendDouble(eElevPos, ts, (i >= 10 && i <= 18) ? 28.0 : 0.5);
+        w.appendDouble(eElevVel, ts, 12.0);
+        w.appendDouble(eElevVolt, ts, 4.2);
+        w.appendDouble(eElevStator, ts, 25.0);
+        w.appendDouble(eElevSupply, ts, 12.0);
+      }
+    }
+
+    RunAnalysisReport report = RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.AUTO, false);
+    assertTrue("COMP_2027".equals(report.robotName()), "Expected COMP_2027 hydrated from snapshot");
+    assertTrue(
+        "sha2027deadbeef".equals(report.configSha()),
+        "Expected ConfigSHA256 from /RealMetadata/ConfigSHA256, got " + report.configSha());
+    assertTrue(
+        report.swerveCorners().size() == 4 && report.swerveCorners().get(0).driveId() == 11,
+        "Expected swerve_modules.csv FL driveId=11 hydrated from EffectiveSnapshot");
+    assertTrue(
+        Math.abs(report.peakSpeedMps() - (60.0 * 0.0508)) < 0.1,
+        "Expected peakSpeedMps ~3.048 m/s from DriveVelocityRadPerSec, got " + report.peakSpeedMps());
+    assertTrue(
+        Double.isFinite(report.battery().estimatedRintMilliOhms())
+            && Math.abs(report.battery().estimatedRintMilliOhms() - 17.0) < 2.0,
+        "Expected Battery R_int ~17.0 mOhm from 2027 PDH/Battery topics, got "
+            + report.battery().estimatedRintMilliOhms());
+    assertTrue(
+        report.systemHealth() != null && Math.abs(report.systemHealth().loopMedianMs() - 9.5) < 0.2,
+        "Expected loopMedianMs ~9.5 ms from /AdvantageKit/RealOutputs/Performance/TotalLoopMs");
+    assertTrue(
+        report.mechanisms().stream()
+            .anyMatch(m -> "Elevator".equals(m.name()) && Math.abs(m.peakStatorAmps() - 25.0) < 0.5),
+        "Expected Elevator mechanism metrics from /AdvantageKit/Elevator/* topics");
+  }
+
+  public static void testCandidatePracticeTuningDiffAndPromoteGate() throws Exception {
+    Path cfgDir = createSampleFluxFigDirectoryWithSwerveModules();
+    FluxFig tuningFig = FluxFig.load(cfgDir, "COMP_2027");
+    tuningFig.setMode(FluxFig.Mode.TUNING);
+    tuningFig.setOverride("COMP_2027", "maxSpeedMps", "4.20");
+    tuningFig.setTableCellOverride("mechanisms", "COMP_2027", "Elevator", "kP", "3.25");
+    String cleanSnapshot = tuningFig.getEffectiveSnapshot();
+
+    Path cleanRunDir = createTempDir("flux-tuning-ready");
+    Files.writeString(cleanRunDir.resolve("tuned-snapshot.txt"), cleanSnapshot, StandardCharsets.UTF_8);
+    try (Writer w = new Writer(cleanRunDir.resolve("practice.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/PowerDistribution/Voltage", "double", "", 0L);
+      int eLoop = w.startEntry("/RealOutputs/Performance/TotalLoopMs", "double", "", 0L);
+      int[] eStator = new int[4];
+      for (int m = 0; m < 4; m++) {
+        eStator[m] = w.startEntry("/Drive/Module" + m + "/DriveStatorCurrentAmps", "double", "", 0L);
+      }
+      for (int i = 1; i <= 25; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eVolt, ts, 12.1);
+        w.appendDouble(eLoop, ts, 10.0);
+        for (int m = 0; m < 4; m++) {
+          w.appendDouble(eStator[m], ts, 52.0);
+        }
+      }
+    }
+
+    Path cleanOut = createTempDir("flux-tuning-ready-out");
+    RunAnalysisReport cleanReport =
+        RunAnalyzer.analyzeRunDirectory(
+            cleanRunDir, cleanOut, cleanRunDir, cfgDir, RobotProfile.COMP_2027, false);
+    assertTrue(
+        cleanReport.candidateTuning() != null && cleanReport.candidateTuning().present(),
+        "Expected CandidateTuningReview when tuned-snapshot.txt is present");
+    assertTrue(
+        "READY_TO_PROMOTE".equals(cleanReport.candidateTuning().verdict()),
+        "Expected READY_TO_PROMOTE for clean practice tuning run, got "
+            + cleanReport.candidateTuning().verdict()
+            + " reasons="
+            + cleanReport.candidateTuning().verdictReasons());
+    assertTrue(
+        cleanReport.candidateTuning().entries().size() == 2,
+        "Expected 2 diff entries (parameter + mechanism table cell), got "
+            + cleanReport.candidateTuning().entries());
+    assertTrue(
+        cleanReport.candidateTuning().promoteCommand().contains("fluxfig.jar promote")
+            && cleanReport.candidateTuning().promoteCommand().contains("tuned-snapshot.txt"),
+        "Expected explicit fluxfig.jar promote CLI command, got "
+            + cleanReport.candidateTuning().promoteCommand());
+
+    Path cleanHtml = cleanOut.resolve("report.html");
+    HtmlReportGenerator.writeRunReport(cleanReport, cleanHtml);
+    String htmlText = Files.readString(cleanHtml, StandardCharsets.UTF_8);
+    assertTrue(
+        htmlText.contains("Candidate Practice Tuning Diff (Unmerged)")
+            && htmlText.contains("READY_TO_PROMOTE")
+            && htmlText.contains("maxSpeedMps")
+            && htmlText.contains("mechanisms[COMP_2027:Elevator].kP")
+            && htmlText.contains("fluxfig.jar promote"),
+        "Expected report.html to render Candidate Practice Tuning Diff panel and promote CLI");
+
+    // Verify the copied snapshot promotes cleanly via FluxFig
+    Path promotedCfgCopy = createSampleFluxFigDirectoryWithSwerveModules();
+    String persistedSnapshot =
+        Files.readString(
+            Path.of(cleanReport.candidateTuning().sourceFilePath()), StandardCharsets.UTF_8);
+    FluxFig.promoteSnapshotToDirectory(
+        persistedSnapshot, promotedCfgCopy, "mentor-test", "M2.3 promote test");
+    FluxFig promotedFig = FluxFig.load(promotedCfgCopy, "COMP_2027");
+    assertTrue(
+        Math.abs(promotedFig.getDouble("maxSpeedMps") - 4.20) < 1e-6,
+        "Expected FluxFig promotion to apply tuned maxSpeedMps");
+
+    // Blocked run: structural key modified + peak drive stator > 60A + brownout
+    Path blockedRunDir = createTempDir("flux-tuning-blocked");
+    Files.writeString(
+        blockedRunDir.resolve("tuned-snapshot.txt"),
+        """
+        # FluxFig Effective Snapshot
+        # ActiveProfile: COMP_2027
+        # RuntimeOverrides:
+        #   COMP_2027.driveStatorLimitAmps: 60.0 -> 90.0
+        #   COMP_2027.wheelRadiusMeters: 0.05080 -> 0.05010
+        """,
+        StandardCharsets.UTF_8);
+    try (Writer w = new Writer(blockedRunDir.resolve("bad_practice.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/PowerDistribution/Voltage", "double", "", 0L);
+      int[] eStator = new int[4];
+      for (int m = 0; m < 4; m++) {
+        eStator[m] = w.startEntry("/Drive/Module" + m + "/DriveStatorCurrentAmps", "double", "", 0L);
+      }
+      for (int i = 1; i <= 20; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eVolt, ts, i == 10 ? 6.40 : 12.0);
+        for (int m = 0; m < 4; m++) {
+          w.appendDouble(eStator[m], ts, i == 10 ? 74.0 : 40.0);
+        }
+      }
+    }
+
+    RunAnalysisReport blockedReport =
+        RunAnalyzer.analyzeRunDirectory(
+            blockedRunDir, blockedRunDir, blockedRunDir, cfgDir, RobotProfile.COMP_2027, false);
+    assertTrue(
+        blockedReport.candidateTuning() != null
+            && "DO_NOT_PROMOTE".equals(blockedReport.candidateTuning().verdict()),
+        "Expected DO_NOT_PROMOTE on structural key + brownout + >60A drive stator, got "
+            + blockedReport.candidateTuning());
+    assertTrue(
+        blockedReport.candidateTuning().entries().stream()
+            .anyMatch(e -> e.key().contains("driveStatorLimitAmps") && e.structural()),
+        "Expected driveStatorLimitAmps flagged as structural");
+  }
+
+  public static void testTelemetryTruthfulnessHootScaleNoSyntheticVoltageMultiEnableAndBatteryGates()
+      throws Exception {
+    // Phoenix 6 drive wheel-scale (2027) vs legacy rotor-scale (2026 FUEL)
+    Path hootDir = createTempDir("flux-hoot-scale-test");
+    try (Writer w = new Writer(hootDir.resolve("drive_scale.wpilog"), "Phoenix6")) {
+      int eEnable = w.startEntry("RobotEnable", "boolean", "", 0L);
+      int eVolt = w.startEntry("Phoenix6/TalonFX-8/SupplyVoltage", "double", "", 0L);
+      int[] ids = {2, 4, 6, 8};
+      int[] eVel = new int[4];
+      int[] eStator = new int[4];
+      for (int m = 0; m < 4; m++) {
+        eVel[m] = w.startEntry("Phoenix6/TalonFX-" + ids[m] + "/Velocity", "double", "", 0L);
+        eStator[m] = w.startEntry("Phoenix6/TalonFX-" + ids[m] + "/StatorCurrent", "double", "", 0L);
+      }
+      for (int i = 1; i <= 25; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eVolt, ts, i == 12 ? 6.50 : 12.1);
+        for (int m = 0; m < 4; m++) {
+          w.appendDouble(eVel[m], ts, 10.0);
+          w.appendDouble(eStator[m], ts, 65.0);
+        }
+      }
+    }
+
+    RunAnalysisReport rep2027 =
+        RunAnalyzer.analyzeRunDirectory(hootDir, RobotProfile.COMP_2027, false);
+    RunAnalysisReport repLegacy =
+        RunAnalyzer.analyzeRunDirectory(hootDir, RobotProfile.FUEL, false);
+    double expectedWheelMps = 10.0 * 2.0 * Math.PI * 0.0508;
+    double expectedRotorMps = (10.0 / RobotProfile.FUEL.driveGearRatio()) * 2.0 * Math.PI * 0.0508;
+    assertTrue(
+        Math.abs(rep2027.peakSpeedMps() - expectedWheelMps) < 0.05,
+        "2027 profile must treat Phoenix6 Velocity as wheel RPS (~3.19 m/s), got "
+            + rep2027.peakSpeedMps());
+    assertTrue(
+        Math.abs(repLegacy.peakSpeedMps() - expectedRotorMps) < 0.05,
+        "Legacy 2026 FUEL profile must divide Phoenix6 Velocity by driveGearRatio (~0.50 m/s), got "
+            + repLegacy.peakSpeedMps());
+    assertTrue(
+        Math.abs(rep2027.battery().minVoltage() - 6.50) < 0.05,
+        "All-motor supply voltage scanning must detect 6.50 V sag on BR motor ID 8, got "
+            + rep2027.battery().minVoltage());
+    assertTrue(
+        rep2027.swerveCorners().stream().allMatch(c -> "WARN".equals(c.status())),
+        "65 A peak drive stator must trigger WARN under 60 A limit: " + rep2027.swerveCorners());
+
+    // No-voltage run must emit Double.NaN, never synthetic 12.4 V
+    Path noVoltDir = createTempDir("flux-no-volt-test");
+    try (Writer w = new Writer(noVoltDir.resolve("no_volt.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eStator = w.startEntry("/Drive/Module0/DriveStatorCurrentAmps", "double", "", 0L);
+      for (int i = 1; i <= 20; i++) {
+        long ts = i * 200_000L;
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eStator, ts, 35.0);
+      }
+    }
+    RunAnalysisReport noVoltReport =
+        RunAnalyzer.analyzeRunDirectory(noVoltDir, RobotProfile.COMP_2027, false);
+    assertTrue(
+        Double.isNaN(noVoltReport.battery().minVoltage())
+            && Double.isNaN(noVoltReport.battery().restingVoltage())
+            && noVoltReport.timeline().stream().allMatch(pt -> Double.isNaN(pt.batteryVoltage())),
+        "Missing voltage topics must yield Double.NaN (never synthetic 12.4 V), got min="
+            + noVoltReport.battery().minVoltage());
+
+    // Multi-enable practice session at healthy 12.2 V must NOT trigger false brownout dropouts
+    Path multiEnableDir = createTempDir("flux-multi-enable-practice");
+    try (Writer w = new Writer(multiEnableDir.resolve("practice_cycles.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/PowerDistribution/Voltage", "double", "", 0L);
+      int[] eStator = new int[4];
+      for (int m = 0; m < 4; m++) {
+        eStator[m] = w.startEntry("/Drive/Module" + m + "/DriveStatorCurrentAmps", "double", "", 0L);
+      }
+      for (int i = 0; i <= 100; i++) {
+        double tSec = i * 0.2;
+        long ts = Math.round(tSec * 1_000_000.0);
+        // 4 intentional practice enable bursts separated by 2.0 s disabled gaps
+        boolean enabled =
+            (tSec >= 1.0 && tSec <= 4.0)
+                || (tSec >= 6.0 && tSec <= 9.0)
+                || (tSec >= 11.0 && tSec <= 14.0)
+                || (tSec >= 16.0 && tSec <= 19.0);
+        w.appendBoolean(eEnable, ts, enabled);
+        w.appendDouble(eVolt, ts, 12.2);
+        for (int m = 0; m < 4; m++) {
+          w.appendDouble(eStator[m], ts, enabled ? 58.0 : 0.0);
+        }
+      }
+    }
+    RunAnalysisReport multiReport =
+        RunAnalyzer.analyzeRunDirectory(multiEnableDir, RobotProfile.COMP_2027, false);
+    assertTrue(
+        multiReport.battery().enableDropouts() == 0 && "PASS".equals(multiReport.overallVerdict()),
+        "Healthy multi-enable practice session at 12.2V and 58A must have 0 dropouts and PASS, got dropouts="
+            + multiReport.battery().enableDropouts()
+            + " verdict="
+            + multiReport.overallVerdict());
+
+    // BatteryAnalyzer strict regression gates: reject positive slope, low spread, low R^2, stator-only
+    List<RunAnalysisReport.TimelinePoint> posSlope = new ArrayList<>();
+    List<RunAnalysisReport.TimelinePoint> lowSpread = new ArrayList<>();
+    List<RunAnalysisReport.TimelinePoint> noisyLowR2 = new ArrayList<>();
+    List<RunAnalysisReport.TimelinePoint> statorOnly = new ArrayList<>();
+    for (int i = 0; i < 20; i++) {
+      double t = i * 0.2;
+      double cur = 20.0 + i * 5.0;
+      posSlope.add(
+          new RunAnalysisReport.TimelinePoint(t, true, "Teleop", 11.5 + cur * 0.010, 80.0, cur, 1.0, 0.0, 0.0));
+      lowSpread.add(
+          new RunAnalysisReport.TimelinePoint(t, true, "Teleop", 12.4 - (20.0 + i * 0.4) * 0.02, 80.0, 20.0 + i * 0.4, 1.0, 0.0, 0.0));
+      double noiseV = (i % 2 == 0) ? 12.1 : 11.4;
+      noisyLowR2.add(
+          new RunAnalysisReport.TimelinePoint(t, true, "Teleop", noiseV, 80.0, cur, 1.0, 0.0, 0.0));
+      statorOnly.add(
+          new RunAnalysisReport.TimelinePoint(t, true, "Teleop", 12.6 - cur * 0.015, cur * 2.5, 0.0, 1.0, 0.0, 0.0));
+    }
+    assertTrue(
+        Double.isNaN(BatteryAnalyzer.analyze("PosBatt", posSlope, 0).estimatedRintMilliOhms())
+            && "NO DATA".equals(BatteryAnalyzer.analyze("PosBatt", posSlope, 0).healthGrade()),
+        "Positive dV/dI slope must return NaN / NO DATA rather than 8.0 mOhm EXCELLENT");
+    assertTrue(
+        Double.isNaN(BatteryAnalyzer.analyze("NarrowBatt", lowSpread, 0).estimatedRintMilliOhms()),
+        "Current spread < 15 A must return NaN / NO DATA");
+    assertTrue(
+        Double.isNaN(BatteryAnalyzer.analyze("NoisyBatt", noisyLowR2, 0).estimatedRintMilliOhms()),
+        "Poor R^2 (< 0.35) must return NaN / NO DATA");
+    assertTrue(
+        Double.isNaN(BatteryAnalyzer.analyze("StatorOnlyBatt", statorOnly, 0).estimatedRintMilliOhms()),
+        "Zero supply current must not fabricate supply from stator current");
+  }
+
+  public static void testDigitalTwinCalibratorGyroSpinArmCosineR2GateAndPidProtection()
+      throws Exception {
+    Path cfgDir = createSampleFluxFigDirectoryWithSwerveModules();
+    Path mechCsv = cfgDir.resolve("mechanisms.csv");
+    String originalMechanismsCsv = Files.readString(mechCsv, StandardCharsets.UTF_8);
+
+    Path runDir = createTempDir("flux-simcal-gyro-arm");
+    double trueWheelRadius = 0.04910;
+    double driveBaseRadius = Math.hypot(0.56515 * 0.5, 0.56515 * 0.5);
+    double armGearRatio = 48.0;
+
+    try (Writer w = new Writer(runDir.resolve("spin_and_arm.wpilog"), "AdvantageKit")) {
+      int eEnable = w.startEntry("/DriverStation/Enabled", "boolean", "", 0L);
+      int eVolt = w.startEntry("/PowerDistribution/Voltage", "double", "", 0L);
+      int eYaw = w.startEntry("/Drive/Gyro/YawPositionRad", "double", "", 0L);
+      int[] eModPos = new int[4];
+      for (int m = 0; m < 4; m++) {
+        eModPos[m] = w.startEntry("/Drive/Module" + m + "/DrivePositionRad", "double", "", 0L);
+      }
+
+      int eArmPos = w.startEntry("/Arm/PositionRotations", "double", "", 0L);
+      int eArmVel = w.startEntry("/Arm/VelocityRPS", "double", "", 0L);
+      int eArmVolt = w.startEntry("/Arm/AppliedVoltage", "double", "", 0L);
+
+      int eElevPos = w.startEntry("/Elevator/PositionRotations", "double", "", 0L);
+      int eElevVel = w.startEntry("/Elevator/VelocityRPS", "double", "", 0L);
+      int eElevVolt = w.startEntry("/Elevator/AppliedVoltage", "double", "", 0L);
+
+      double unwrappedYaw = 0.0;
+      double wheelRad = 0.0;
+      double dt = 0.05;
+      double prevArmVel = 0.0;
+      double armRotorPos = 0.0;
+      for (int i = 0; i <= 120; i++) {
+        long ts = Math.round(i * dt * 1_000_000.0);
+        w.appendBoolean(eEnable, ts, true);
+        w.appendDouble(eVolt, ts, 12.2);
+
+        // Spin in place at 1.6 rad/s across +/- pi wrapping boundary
+        if (i > 0) {
+          double dYaw = 1.6 * dt;
+          unwrappedYaw += dYaw;
+          wheelRad += (dYaw * driveBaseRadius) / trueWheelRadius;
+        }
+        double wrappedYaw = Math.atan2(Math.sin(unwrappedYaw), Math.cos(unwrappedYaw));
+        w.appendDouble(eYaw, ts, wrappedYaw);
+        for (int m = 0; m < 4; m++) {
+          w.appendDouble(eModPos[m], ts, wheelRad);
+        }
+
+        // ARM_COSINE holding & ramp with rotor positions scaled by gearRatio=48.0
+        // True kG=0.42 V, kS=0.16 V, kV=0.14 V/RPS, kA=0.015 V/RPS^2
+        double armVel;
+        double armAccel;
+        if (i < 12) {
+          armRotorPos = (i % 4) * 2.0; // 0, 2, 4, 6 rotor rot => 0, 15, 30, 45 deg
+          armVel = 0.0;
+          armAccel = 0.0;
+        } else {
+          armVel = 2.0 + (i - 12) * 0.25 + Math.sin(i * 0.3) * 1.5;
+          armAccel = (armVel - prevArmVel) / dt;
+          armRotorPos = Math.min(10.0, 2.0 + (i - 12) * 0.06);
+        }
+        prevArmVel = armVel;
+        double jointRad = (armRotorPos / armGearRatio) * 2.0 * Math.PI;
+        double armAppliedV =
+            0.42 * Math.cos(jointRad)
+                + (Math.abs(armVel) > 0.25 ? (0.16 + 0.14 * armVel + 0.015 * armAccel) : 0.0);
+        w.appendDouble(eArmPos, ts, armRotorPos);
+        w.appendDouble(eArmVel, ts, armVel);
+        w.appendDouble(eArmVolt, ts, armAppliedV);
+
+        // Noisy uncorrelated Elevator samples (R^2 < 0.50 -> must be rejected!)
+        double noisyElevVel = 5.0 + (i % 15) * 1.2;
+        double noisyElevVolt = (i % 2 == 0) ? 2.5 : 8.5;
+        w.appendDouble(eElevPos, ts, i * 0.2);
+        w.appendDouble(eElevVel, ts, noisyElevVel);
+        w.appendDouble(eElevVolt, ts, noisyElevVolt);
+      }
+    }
+
+    RunAnalysisReport report =
+        RunAnalyzer.analyzeRunDirectory(runDir, RobotProfile.COMP_2027, false);
+    DigitalTwinCalibrator.SimCalibrationSummary summary =
+        DigitalTwinCalibrator.calibrateAndWrite(
+            List.of(report), List.of(runDir), cfgDir, runDir, "COMP_2027");
+
+    assertTrue(
+        Math.abs(summary.calibratedWheelRadiusMeters() - trueWheelRadius) < 5e-4,
+        "Expected gyro spin-in-place wheelRadiusMeters ~0.04910 m, got "
+            + summary.calibratedWheelRadiusMeters());
+
+    DigitalTwinCalibrator.MechanismFeedforwardFit armFit =
+        summary.calibratedMechanisms().stream()
+            .filter(f -> "Arm".equals(f.mechanism()))
+            .findFirst()
+            .orElse(null);
+    assertTrue(armFit != null, "Expected high-R^2 Arm fit in sim-calibration summary");
+    assertTrue(
+        Math.abs(armFit.kG() - 0.42) < 0.03
+            && Math.abs(armFit.kV() - 0.14) < 0.02
+            && armFit.rSquared() >= 0.90,
+        "Expected ARM_COSINE fit with pos/gearRatio scaling to recover kG~0.42, kV~0.14, R^2>=0.90, got "
+            + armFit);
+
+    boolean elevatorAccepted =
+        summary.calibratedMechanisms().stream().anyMatch(f -> "Elevator".equals(f.mechanism()));
+    assertTrue(
+        !elevatorAccepted,
+        "Noisy low-R^2 Elevator fit must be rejected by R^2 >= 0.50 gate");
+
+    String afterMechanismsCsv = Files.readString(mechCsv, StandardCharsets.UTF_8);
+    assertTrue(
+        originalMechanismsCsv.equals(afterMechanismsCsv),
+        "DigitalTwinCalibrator must NEVER overwrite production PID gains in mechanisms.csv");
+
+    String calJson = Files.readString(summary.summaryJsonPath(), StandardCharsets.UTF_8);
+    assertTrue(
+        calJson.contains("\"wheelRadiusSource\": \"GYRO_SPIN_IN_PLACE\"")
+            && calJson.contains("\"mechanismsCsvModified\": false")
+            && !calJson.contains(": NaN"),
+        "Expected valid sim-calibration.json with GYRO_SPIN_IN_PLACE and mechanismsCsvModified=false");
+  }
+
+  public static void testHtmlReportOfflineSafeAndXssClean() throws Exception {
+    Path outDir = createTempDir("flux-html-xss-offline");
+    assertTrue(
+        RunAnalyzer.buildVideoJumpLink("javascript:alert(1)", 0.0, 5.0).isEmpty()
+            && RunAnalyzer.buildVideoJumpLink("data:text/html,<script>alert(1)</script>", 0.0, 5.0)
+                .isEmpty()
+            && RunAnalyzer.buildVideoJumpLink("https://youtu.be/safe123", 2.0, 10.0)
+                .startsWith("https://youtu.be/safe123"),
+        "buildVideoJumpLink must allow only http:// and https:// URLs");
+
+    RunAnalysisReport.BatteryMetrics batt =
+        new RunAnalysisReport.BatteryMetrics(
+            "Batt-<script>alert(0)</script>", Double.NaN, Double.NaN, 0.0, Double.NaN, 0.0, 0.0, 0.0, 0.0, 0.0, 0, "NO DATA");
+    RunAnalysisReport.ShotEvent xssShot =
+        new RunAnalysisReport.ShotEvent(
+            1, 4.0, 0.5, 42.0, 41.5, 0.5, 5.0, 15.0, Double.NaN, "javascript:alert(1)", "NOMINAL");
+    RunAnalysisReport.VoiceCorrelation xssVoice =
+        new RunAnalysisReport.VoiceCorrelation(
+            "DRIVER",
+            5.0,
+            "<img src=x onerror=alert(1)>'\"</script><script>alert(2)</script>",
+            0.0,
+            "<b>Summary</b>",
+            "Diagnosis",
+            "data:text/html,<script>alert(9)</script>",
+            "WARN");
+    RunAnalysisReport.Sim3DFrame xssFrame =
+        new RunAnalysisReport.Sim3DFrame(
+            1.0,
+            3.0,
+            4.0,
+            0.2,
+            Double.NaN,
+            45.0,
+            40.0,
+            3.0,
+            0.2,
+            0.1,
+            1,
+            0,
+            2,
+            "<svg onload=alert(3)></script>",
+            new double[] {4.0, 4.0, 0.2});
+    RunAnalysisReport.FuelSimMetrics fuelSim =
+        new RunAnalysisReport.FuelSimMetrics(
+            1, 1, 0, 100.0, 2, 1, 0, null, List.of(), List.of(xssFrame));
+    RunAnalysisReport report =
+        new RunAnalysisReport(
+            "run_<script>alert(4)</script>",
+            "COMP_2027",
+            "Practice / Pit Session",
+            "Blue 1",
+            false,
+            batt.batteryName(),
+            "abc123",
+            "cfg123",
+            "javascript:alert(5)",
+            0.0,
+            10.0,
+            8.0,
+            12.0,
+            3.2,
+            "WARN",
+            List.of("Alert <script>alert(6)</script>"),
+            batt,
+            List.of(),
+            List.of(),
+            List.of(xssShot),
+            List.of(xssVoice),
+            List.of(
+                new RunAnalysisReport.TimelinePoint(0.0, true, "Teleop", Double.NaN, 10.0, 0.0, 1.0, 0.0, 0.0),
+                new RunAnalysisReport.TimelinePoint(1.0, true, "Teleop", Double.NaN, 20.0, 0.0, 2.0, 0.0, 0.0)),
+            null,
+            null,
+            List.of(),
+            List.of(),
+            fuelSim,
+            null);
+
+    Path htmlPath = outDir.resolve("report.html");
+    HtmlReportGenerator.writeRunReport(report, htmlPath);
+    HtmlReportGenerator.writeBatchSummary(List.of(report), outDir);
+
+    String html = Files.readString(htmlPath, StandardCharsets.UTF_8);
+    String idxHtml = Files.readString(outDir.resolve("runs-index.html"), StandardCharsets.UTF_8);
+
+    assertTrue(
+        !html.contains("https://")
+            && !html.contains("cdn.jsdelivr.net")
+            && !html.contains("fonts.googleapis.com")
+            && !html.contains("squarespace-cdn.com")
+            && !idxHtml.contains("https://"),
+        "Generated HTML reports must have zero external HTTPS CDN dependencies");
+    assertTrue(
+        !html.contains(".innerHTML"),
+        "Generated report.html must not use unsafe .innerHTML mutations");
+    assertTrue(
+        !html.contains("javascript:alert")
+            && !html.contains("data:text/html")
+            && !html.contains("<script>alert")
+            && !html.contains("<img src=x")
+            && !html.contains("<svg onload=alert"),
+        "Generated report.html must block javascript:/data: links and escape all dynamic HTML/JS XSS payloads");
+    assertTrue(
+        html.contains("sim3dCanvas") && html.contains("sim3dFrames"),
+        "Offline Canvas replay viewer must remain embedded in report.html");
+  }
+
+  private static Path createSampleFluxFigDirectoryWithSwerveModules() throws Exception {
+    Path dir = createSampleFluxFigDirectory();
+    String baseParams = Files.readString(dir.resolve("parameters.csv"), StandardCharsets.UTF_8);
+    Files.writeString(
+        dir.resolve("parameters.csv"),
+        baseParams + "maxSpeedMps,double,m/s,4.80,4.80,4.80,Maximum chassis linear speed\n",
+        StandardCharsets.UTF_8);
+    Files.writeString(
+        dir.resolve("swerve_modules.csv"),
+        """
+        robot,corner,driveMotorId,turnMotorId,cancoderId,encoderOffsetRot,invertDrive,invertTurn
+        COMP_2027,FL,11,12,31,0.123,false,false
+        COMP_2027,FR,13,14,32,0.234,true,false
+        COMP_2027,BL,15,16,33,0.345,false,false
+        COMP_2027,BR,17,18,34,0.456,true,false
+        """,
+        StandardCharsets.UTF_8);
+    return dir;
   }
 
   private static Path createSampleFluxFigDirectory() throws Exception {

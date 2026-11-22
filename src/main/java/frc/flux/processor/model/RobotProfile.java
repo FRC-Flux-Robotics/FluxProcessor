@@ -130,6 +130,76 @@ public record RobotProfile(
               "BR", new CornerConfig("BR", 3, 4, 21)),
           List.of());
 
+  /** Official 2027 SystemCore competition chassis profile ({@code COMP_2027}). */
+  public static final RobotProfile COMP_2027 =
+      new RobotProfile(
+          "COMP_2027",
+          20,
+          0.0508,
+          6.394736842105262,
+          Map.of(
+              "FL", new CornerConfig("FL", 2, 1, 21),
+              "FR", new CornerConfig("FR", 4, 3, 22),
+              "BL", new CornerConfig("BL", 6, 5, 23),
+              "BR", new CornerConfig("BR", 8, 7, 24)),
+          List.of(
+              new MechMotorSpec("ElevatorLeader", 10, "Position Elevator", 60.0, false),
+              new MechMotorSpec("ArmPivot", 12, "Position Arm/Pivot", 50.0, false),
+              new MechMotorSpec("IntakeRoller", 14, "Velocity Roller", 50.0, false)));
+
+  /** Official 2027 SystemCore practice chassis profile ({@code PRACTICE_2027}). */
+  public static final RobotProfile PRACTICE_2027 =
+      new RobotProfile(
+          "PRACTICE_2027",
+          20,
+          0.0508,
+          6.394736842105262,
+          Map.of(
+              "FL", new CornerConfig("FL", 2, 1, 21),
+              "FR", new CornerConfig("FR", 4, 3, 22),
+              "BL", new CornerConfig("BL", 6, 5, 23),
+              "BR", new CornerConfig("BR", 8, 7, 24)),
+          List.of());
+
+  /** Official 2027 Connecticut roboRIO bare-drivetrain chassis profile ({@code CHASSIS_3}). */
+  public static final RobotProfile CHASSIS_3 =
+      new RobotProfile(
+          "CHASSIS_3",
+          24,
+          0.0508,
+          6.394736842105262,
+          Map.of(
+              "FL", new CornerConfig("FL", 7, 8, 23),
+              "FR", new CornerConfig("FR", 1, 2, 20),
+              "BL", new CornerConfig("BL", 5, 6, 22),
+              "BR", new CornerConfig("BR", 3, 4, 21)),
+          List.of());
+
+  /** Resolves a named built-in profile or falls back to a custom named profile with default geometry. */
+  public static RobotProfile fromPresetName(String rawName) {
+    if (rawName == null || rawName.isBlank()) {
+      return AUTO;
+    }
+    String trimmed = rawName.trim();
+    String upper = trimmed.toUpperCase(Locale.ROOT);
+    return switch (upper) {
+      case "AUTO" -> AUTO;
+      case "FUEL" -> FUEL;
+      case "CORAL" -> CORAL;
+      case "COMP_2027" -> COMP_2027;
+      case "PRACTICE_2027" -> PRACTICE_2027;
+      case "CHASSIS_3" -> CHASSIS_3;
+      default ->
+          new RobotProfile(
+              trimmed,
+              AUTO.pigeonId(),
+              AUTO.wheelRadiusMeters(),
+              AUTO.driveGearRatio(),
+              Map.of(),
+              List.of());
+    };
+  }
+
   /**
    * Sentinel profile that inspects each run's {@code .wpilog} entry table (including {@code
    * /FluxFig/EffectiveSnapshot}, {@code robot-profile.json}, or AdvantageKit/CTRE/REV topics) to
@@ -162,13 +232,17 @@ public record RobotProfile(
     String profile = resolveFluxFigProfileName(fig, requestedRobot);
     fig.setActiveProfile(profile);
 
-    int defaultPigeon = "CORAL".equalsIgnoreCase(profile) ? 24 : 20;
+    int defaultPigeon =
+        ("CORAL".equalsIgnoreCase(profile) || "CHASSIS_3".equalsIgnoreCase(profile)) ? 24 : 20;
     int pigeonId = getIntOrDefault(fig, "pigeonId", defaultPigeon);
     double wheelRadius = getDoubleOrDefault(fig, "wheelRadiusMeters", 0.0508);
     double gearRatio = getDoubleOrDefault(fig, "driveGearRatio", 6.394736842105262);
 
     Map<String, CornerConfig> defaultCorners =
-        "CORAL".equalsIgnoreCase(profile) ? CORAL.corners() : FUEL.corners();
+        ("CORAL".equalsIgnoreCase(profile) || "CHASSIS_3".equalsIgnoreCase(profile))
+            ? CORAL.corners()
+            : FUEL.corners();
+    Map<String, int[]> swerveModuleIdsByCorner = loadSwerveModuleIds(fig, profile);
     Map<String, CornerConfig> corners = new LinkedHashMap<>();
     String[][] cornerDefs = {
       {"FL", "flDriveId", "flSteerId", "flCancoderId", "0", "FrontLeft"},
@@ -180,9 +254,19 @@ public record RobotProfile(
     for (String[] def : cornerDefs) {
       String cKey = def[0];
       CornerConfig fallback = defaultCorners.get(cKey);
-      int dId = getIntOrDefault(fig, def[1], fallback != null ? fallback.driveMotorId() : 1);
-      int sId = getIntOrDefault(fig, def[2], fallback != null ? fallback.steerMotorId() : 2);
-      int cId = getIntOrDefault(fig, def[3], fallback != null ? fallback.cancoderId() : 21);
+      int[] csvIds = swerveModuleIdsByCorner.get(cKey);
+      int dId =
+          csvIds != null
+              ? csvIds[0]
+              : getIntOrDefault(fig, def[1], fallback != null ? fallback.driveMotorId() : 1);
+      int sId =
+          csvIds != null
+              ? csvIds[1]
+              : getIntOrDefault(fig, def[2], fallback != null ? fallback.steerMotorId() : 2);
+      int cId =
+          csvIds != null
+              ? csvIds[2]
+              : getIntOrDefault(fig, def[3], fallback != null ? fallback.cancoderId() : 21);
 
       String idx = def[4];
       String longName = def[5];
@@ -190,6 +274,9 @@ public record RobotProfile(
           resolveFirstAvailableOrDefault(
               availableTopics,
               List.of(
+                  "Drive/Module" + idx + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + cKey + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + longName + "/DriveStatorCurrentAmps",
                   "Phoenix6/TalonFX-" + dId + "/StatorCurrent",
                   "Drive/Module" + idx + "/DriveCurrentAmps",
                   "Drive/Module" + cKey + "/DriveCurrentAmps",
@@ -199,24 +286,29 @@ public record RobotProfile(
           resolveFirstAvailableOrDefault(
               availableTopics,
               List.of(
-                  "Phoenix6/TalonFX-" + dId + "/SupplyCurrent",
                   "Drive/Module" + idx + "/DriveSupplyCurrentAmps",
-                  "Drive/Module" + cKey + "/DriveSupplyCurrentAmps"),
+                  "Drive/Module" + cKey + "/DriveSupplyCurrentAmps",
+                  "Drive/Module" + longName + "/DriveSupplyCurrentAmps",
+                  "Phoenix6/TalonFX-" + dId + "/SupplyCurrent"),
               "Phoenix6/TalonFX-" + dId + "/SupplyCurrent");
       String dVel =
           resolveFirstAvailableOrDefault(
               availableTopics,
               List.of(
-                  "Phoenix6/TalonFX-" + dId + "/Velocity",
                   "Drive/Module" + idx + "/DriveVelocityRadPerSec",
                   "Drive/Module" + idx + "/DriveVelocityMetersPerSec",
                   "Drive/Module" + idx + "/DriveVelocityRps",
-                  "Drive/Module" + cKey + "/DriveVelocityRadPerSec"),
+                  "Drive/Module" + cKey + "/DriveVelocityRadPerSec",
+                  "Drive/Module" + longName + "/DriveVelocityRadPerSec",
+                  "Phoenix6/TalonFX-" + dId + "/Velocity"),
               "Phoenix6/TalonFX-" + dId + "/Velocity");
       String sStator =
           resolveFirstAvailableOrDefault(
               availableTopics,
               List.of(
+                  "Drive/Module" + idx + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + cKey + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + longName + "/TurnStatorCurrentAmps",
                   "Phoenix6/TalonFX-" + sId + "/StatorCurrent",
                   "Drive/Module" + idx + "/TurnCurrentAmps",
                   "Drive/Module" + idx + "/SteerCurrentAmps",
@@ -233,6 +325,9 @@ public record RobotProfile(
       for (FluxFig.MechanismSpec m : specs) {
         String name = m.mechanism();
         String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.startsWith("swervedrive")) {
+          continue;
+        }
         boolean isShooter =
             lower.contains("shooter") || lower.contains("flywheel") || lower.contains("launcher");
         String role =
@@ -244,49 +339,66 @@ public record RobotProfile(
                         ? "Position Arm/Pivot"
                         : "Mechanism"));
 
+        List<String> statorCandidates = new ArrayList<>();
+        if (m.followerMotorId() > 0) {
+          statorCandidates.add(name + "/LeaderStatorCurrentA");
+          statorCandidates.add(name + "/LeaderStatorCurrentAmps");
+        }
+        statorCandidates.add(name + "/StatorCurrentAmps");
+        statorCandidates.add(name + "/StatorCurrentA");
+        statorCandidates.add(name + "/LeaderStatorCurrentA");
+        statorCandidates.add("Mechanisms/" + name + "/LeaderStatorAmps");
+        statorCandidates.add("Mechanisms/" + name + "/StatorCurrentAmps");
+        statorCandidates.add("Mechanisms/" + name + "/StatorCurrentA");
+        statorCandidates.add(name + "/LeaderStatorAmps");
+        statorCandidates.add(name + "/CurrentAmps");
+        statorCandidates.add("Phoenix6/TalonFX-" + m.motorId() + "/StatorCurrent");
+
         String statorT =
             resolveFirstAvailableOrDefault(
                 availableTopics,
-                List.of(
-                    "Phoenix6/TalonFX-" + m.motorId() + "/StatorCurrent",
-                    "Mechanisms/" + name + "/LeaderStatorAmps",
-                    "Mechanisms/" + name + "/StatorCurrentAmps",
-                    name + "/LeaderStatorAmps",
-                    name + "/CurrentAmps"),
+                statorCandidates,
                 "Phoenix6/TalonFX-" + m.motorId() + "/StatorCurrent");
         String supplyT =
             resolveFirstAvailableOrDefault(
                 availableTopics,
                 List.of(
-                    "Phoenix6/TalonFX-" + m.motorId() + "/SupplyCurrent",
-                    "Mechanisms/" + name + "/LeaderSupplyAmps",
+                    name + "/SupplyCurrentAmps",
+                    name + "/SupplyCurrentA",
                     "Mechanisms/" + name + "/SupplyCurrentAmps",
-                    name + "/LeaderSupplyAmps"),
+                    "Mechanisms/" + name + "/SupplyCurrentA",
+                    "Mechanisms/" + name + "/LeaderSupplyAmps",
+                    name + "/LeaderSupplyAmps",
+                    "Phoenix6/TalonFX-" + m.motorId() + "/SupplyCurrent"),
                 "Phoenix6/TalonFX-" + m.motorId() + "/SupplyCurrent");
         String velT =
             resolveFirstAvailableOrDefault(
                 availableTopics,
                 List.of(
-                    "Phoenix6/TalonFX-" + m.motorId() + "/Velocity",
+                    name + "/VelocityRPS",
+                    name + "/VelocityRps",
+                    "Mechanisms/" + name + "/VelocityRPS",
                     "Mechanisms/" + name + "/VelocityRps",
                     "Mechanisms/" + name + "/LeaderVelocityRps",
-                    name + "/VelocityRps"),
+                    "Phoenix6/TalonFX-" + m.motorId() + "/Velocity"),
                 "Phoenix6/TalonFX-" + m.motorId() + "/Velocity");
         String posT =
             resolveFirstAvailableOrDefault(
                 availableTopics,
                 List.of(
-                    "Phoenix6/TalonFX-" + m.motorId() + "/Position",
-                    "Mechanisms/" + name + "/PositionRot",
+                    name + "/PositionRotations",
+                    name + "/PositionRot",
                     "Mechanisms/" + name + "/PositionRotations",
-                    name + "/PositionRot"),
+                    "Mechanisms/" + name + "/PositionRot",
+                    "Phoenix6/TalonFX-" + m.motorId() + "/Position"),
                 "Phoenix6/TalonFX-" + m.motorId() + "/Position");
         String resetT =
             resolveFirstAvailableOrDefault(
                 availableTopics,
                 List.of(
-                    "Phoenix6/TalonFX-" + m.motorId() + "/ResetCount",
-                    "Mechanisms/" + name + "/ResetCount"),
+                    name + "/ResetCount",
+                    "Mechanisms/" + name + "/ResetCount",
+                    "Phoenix6/TalonFX-" + m.motorId() + "/ResetCount"),
                 "Phoenix6/TalonFX-" + m.motorId() + "/ResetCount");
 
         mechanisms.add(
@@ -308,22 +420,28 @@ public record RobotProfile(
               resolveFirstAvailableOrDefault(
                   availableTopics,
                   List.of(
-                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/StatorCurrent",
-                      "Mechanisms/" + name + "/FollowerStatorAmps"),
+                      name + "/FollowerStatorCurrentA",
+                      name + "/FollowerStatorCurrentAmps",
+                      "Mechanisms/" + name + "/FollowerStatorAmps",
+                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/StatorCurrent"),
                   "Phoenix6/TalonFX-" + m.followerMotorId() + "/StatorCurrent");
           String fSupply =
               resolveFirstAvailableOrDefault(
                   availableTopics,
                   List.of(
-                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/SupplyCurrent",
-                      "Mechanisms/" + name + "/FollowerSupplyAmps"),
+                      name + "/FollowerSupplyCurrentA",
+                      name + "/FollowerSupplyCurrentAmps",
+                      "Mechanisms/" + name + "/FollowerSupplyAmps",
+                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/SupplyCurrent"),
                   "Phoenix6/TalonFX-" + m.followerMotorId() + "/SupplyCurrent");
           String fVel =
               resolveFirstAvailableOrDefault(
                   availableTopics,
                   List.of(
-                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/Velocity",
+                      name + "/FollowerVelocityRPS",
+                      name + "/FollowerVelocityRps",
                       "Mechanisms/" + name + "/FollowerVelocityRps",
+                      "Phoenix6/TalonFX-" + m.followerMotorId() + "/Velocity",
                       velT),
                   "Phoenix6/TalonFX-" + m.followerMotorId() + "/Velocity");
           mechanisms.add(
@@ -353,6 +471,64 @@ public record RobotProfile(
             ? FluxFig.load(configDir, requestedRobot)
             : FluxFig.load(configDir);
     return fromFluxFig(fig, requestedRobot, Set.of());
+  }
+
+  private static Map<String, int[]> loadSwerveModuleIds(FluxFig fig, String profile) {
+    Map<String, int[]> idsByCorner = new LinkedHashMap<>();
+    if (fig == null || !fig.getTableNames().contains("swerve_modules")) {
+      return idsByCorner;
+    }
+    List<Map<String, String>> rows = fig.getTableForProfile("swerve_modules", profile);
+    for (Map<String, String> row : rows) {
+      String corner = findCellIgnoreCase(row, "corner");
+      if (corner == null || corner.isBlank()) {
+        continue;
+      }
+      String normCorner = normalizeCornerKey(corner);
+      int driveId = parseIntCell(row, "driveMotorId", parseIntCell(row, "driveId", -1));
+      int turnId = parseIntCell(row, "turnMotorId", parseIntCell(row, "steerMotorId", -1));
+      int cancoderId = parseIntCell(row, "cancoderId", 0);
+      if (normCorner != null && driveId > 0) {
+        idsByCorner.put(normCorner, new int[] {driveId, Math.max(0, turnId), Math.max(0, cancoderId)});
+      }
+    }
+    return idsByCorner;
+  }
+
+  private static String findCellIgnoreCase(Map<String, String> row, String key) {
+    if (row.containsKey(key)) {
+      return row.get(key);
+    }
+    String target = key.replace("_", "").toLowerCase(Locale.ROOT);
+    for (Map.Entry<String, String> e : row.entrySet()) {
+      if (e.getKey().replace("_", "").toLowerCase(Locale.ROOT).equals(target)) {
+        return e.getValue();
+      }
+    }
+    return null;
+  }
+
+  private static int parseIntCell(Map<String, String> row, String key, int fallback) {
+    String raw = findCellIgnoreCase(row, key);
+    if (raw == null || raw.isBlank()) {
+      return fallback;
+    }
+    try {
+      return Integer.parseInt(raw.trim());
+    } catch (NumberFormatException e) {
+      return fallback;
+    }
+  }
+
+  private static String normalizeCornerKey(String raw) {
+    String u = raw.trim().toUpperCase(Locale.ROOT).replace("_", "").replace("-", "").replace(" ", "");
+    return switch (u) {
+      case "FL", "FRONTLEFT", "0", "MODULE0" -> "FL";
+      case "FR", "FRONTRIGHT", "1", "MODULE1" -> "FR";
+      case "BL", "BACKLEFT", "REARLEFT", "2", "MODULE2" -> "BL";
+      case "BR", "BACKRIGHT", "REARRIGHT", "3", "MODULE3" -> "BR";
+      default -> null;
+    };
   }
 
   private static String resolveFluxFigProfileName(FluxFig fig, String requestedRobot) {
@@ -574,9 +750,11 @@ public record RobotProfile(
 
     if (requested != null
         && !"AUTO".equals(requested.robotName())
-        && !requested.corners().isEmpty()
-        && matchesAnyCornerTopic(requested, allTopics)) {
-      return requested;
+        && !requested.corners().isEmpty()) {
+      RobotProfile adapted = adaptProfileToTopics(requested, allTopics);
+      if (matchesAnyCornerTopic(adapted, allTopics)) {
+        return adapted;
+      }
     }
 
     if (allTopics.contains("Phoenix6/Pigeon2-20/Yaw")
@@ -611,12 +789,154 @@ public record RobotProfile(
     }
 
     String inferredName =
-        (requested != null
-                && !"AUTO".equals(requested.robotName())
-                && !"FUEL".equals(requested.robotName()))
+        (requested != null && !"AUTO".equals(requested.robotName()))
             ? requested.robotName()
             : inferRobotNameFromLogs(allLogs, runDir);
     return autoDiscoverProfile(inferredName, allLogs, allTopics);
+  }
+
+  private static RobotProfile adaptProfileToTopics(RobotProfile base, Set<String> availableTopics) {
+    if (availableTopics == null || availableTopics.isEmpty()) {
+      return base;
+    }
+    Map<String, CornerConfig> adaptedCorners = new LinkedHashMap<>();
+    String[][] defs = {
+      {"FL", "0", "FrontLeft"},
+      {"FR", "1", "FrontRight"},
+      {"BL", "2", "BackLeft"},
+      {"BR", "3", "BackRight"}
+    };
+    for (String[] def : defs) {
+      String cKey = def[0];
+      CornerConfig orig = base.corners().get(cKey);
+      if (orig == null) {
+        continue;
+      }
+      String idx = def[1];
+      String longName = def[2];
+      String dStator =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.driveStatorTopic(),
+                  "Drive/Module" + idx + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + cKey + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + longName + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + idx + "/DriveCurrentAmps",
+                  "Phoenix6/TalonFX-" + orig.driveMotorId() + "/StatorCurrent"),
+              orig.driveStatorTopic());
+      String dSupply =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.driveSupplyTopic(),
+                  "Drive/Module" + idx + "/DriveSupplyCurrentAmps",
+                  "Drive/Module" + cKey + "/DriveSupplyCurrentAmps",
+                  "Drive/Module" + longName + "/DriveSupplyCurrentAmps",
+                  "Phoenix6/TalonFX-" + orig.driveMotorId() + "/SupplyCurrent"),
+              orig.driveSupplyTopic());
+      String dVel =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.driveVelocityTopic(),
+                  "Drive/Module" + idx + "/DriveVelocityRadPerSec",
+                  "Drive/Module" + idx + "/DriveVelocityMetersPerSec",
+                  "Drive/Module" + idx + "/DriveVelocityRps",
+                  "Drive/Module" + cKey + "/DriveVelocityRadPerSec",
+                  "Phoenix6/TalonFX-" + orig.driveMotorId() + "/Velocity"),
+              orig.driveVelocityTopic());
+      String sStator =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.steerStatorTopic(),
+                  "Drive/Module" + idx + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + cKey + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + longName + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + idx + "/TurnCurrentAmps",
+                  "Phoenix6/TalonFX-" + orig.steerMotorId() + "/StatorCurrent"),
+              orig.steerStatorTopic());
+      adaptedCorners.put(
+          cKey,
+          new CornerConfig(
+              cKey,
+              orig.driveMotorId(),
+              orig.steerMotorId(),
+              orig.cancoderId(),
+              dStator,
+              dSupply,
+              dVel,
+              sStator));
+    }
+
+    List<MechMotorSpec> adaptedMechs = new ArrayList<>();
+    for (MechMotorSpec orig : base.mechanisms()) {
+      String name = orig.name();
+      String statorT =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.statorTopic(),
+                  name + "/StatorCurrentAmps",
+                  name + "/StatorCurrentA",
+                  name + "/LeaderStatorCurrentA",
+                  "Mechanisms/" + name + "/StatorCurrentAmps",
+                  "Mechanisms/" + name + "/LeaderStatorAmps"),
+              orig.statorTopic());
+      String supplyT =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.supplyTopic(),
+                  name + "/SupplyCurrentAmps",
+                  name + "/SupplyCurrentA",
+                  "Mechanisms/" + name + "/SupplyCurrentAmps",
+                  "Mechanisms/" + name + "/LeaderSupplyAmps"),
+              orig.supplyTopic());
+      String velT =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.velocityTopic(),
+                  name + "/VelocityRPS",
+                  name + "/VelocityRps",
+                  "Mechanisms/" + name + "/VelocityRPS",
+                  "Mechanisms/" + name + "/VelocityRps"),
+              orig.velocityTopic());
+      String posT =
+          resolveFirstAvailableOrDefault(
+              availableTopics,
+              List.of(
+                  orig.positionTopic(),
+                  name + "/PositionRotations",
+                  name + "/PositionRot",
+                  "Mechanisms/" + name + "/PositionRotations",
+                  "Mechanisms/" + name + "/PositionRot"),
+              orig.positionTopic());
+      adaptedMechs.add(
+          new MechMotorSpec(
+              orig.name(),
+              orig.motorId(),
+              orig.role(),
+              orig.currentLimitAmps(),
+              orig.isShooter(),
+              statorT,
+              supplyT,
+              velT,
+              posT,
+              orig.resetTopic()));
+    }
+    if (adaptedMechs.isEmpty()) {
+      adaptedMechs.addAll(discoverGenericMechanisms(availableTopics));
+    }
+    return new RobotProfile(
+        base.robotName(),
+        base.pigeonId(),
+        base.wheelRadiusMeters(),
+        base.driveGearRatio(),
+        adaptedCorners,
+        adaptedMechs);
   }
 
   public static String extractFluxFigSnapshotFromLogs(List<ParsedLog> allLogs) {
@@ -643,6 +963,10 @@ public record RobotProfile(
       "FluxFig/ActiveProfile",
       "/AdvantageKit/RealOutputs/FluxFig/ActiveProfile",
       "/RealOutputs/FluxFig/ActiveProfile",
+      "/RealMetadata/FluxFigProfile",
+      "/AdvantageKit/RealMetadata/FluxFigProfile",
+      "/RealMetadata/RobotIdentity",
+      "/AdvantageKit/RealMetadata/RobotIdentity",
       "/RobotIdentity/Id",
       "RobotIdentity/Id",
       "/AdvantageKit/Robot",
@@ -662,15 +986,33 @@ public record RobotProfile(
 
   private static boolean matchesAnyCornerTopic(RobotProfile profile, Set<String> allTopics) {
     for (CornerConfig c : profile.corners().values()) {
-      if (allTopics.contains(c.driveStatorTopic()) || allTopics.contains(c.driveVelocityTopic())) {
+      if (topicPresent(allTopics, c.driveStatorTopic())
+          || topicPresent(allTopics, c.driveVelocityTopic())) {
         return true;
       }
     }
     return false;
   }
 
+  private static boolean topicPresent(Set<String> allTopics, String topic) {
+    if (topic == null || topic.isBlank()) {
+      return false;
+    }
+    String clean = topic.startsWith("/") ? topic.substring(1) : topic;
+    return allTopics.contains(topic)
+        || allTopics.contains(clean)
+        || allTopics.contains("/" + clean)
+        || allTopics.contains("/AdvantageKit/" + clean)
+        || allTopics.contains("/AdvantageKit/RealOutputs/" + clean)
+        || allTopics.contains("/RealOutputs/" + clean);
+  }
+
   private static String inferRobotNameFromLogs(List<ParsedLog> allLogs, Path runDir) {
     String[] metaKeys = {
+      "/RealMetadata/RobotIdentity",
+      "/AdvantageKit/RealMetadata/RobotIdentity",
+      "/RealMetadata/FluxFigProfile",
+      "/AdvantageKit/RealMetadata/FluxFigProfile",
       "/AdvantageKit/Robot",
       "/RealOutputs/Robot",
       "Robot",
@@ -687,11 +1029,20 @@ public record RobotProfile(
       }
     }
     if (runDir != null && runDir.getFileName() != null) {
-      String folder = runDir.getFileName().toString();
-      if (folder.toUpperCase(Locale.ROOT).contains("CORAL")) {
+      String folder = runDir.getFileName().toString().toUpperCase(Locale.ROOT);
+      if (folder.contains("CHASSIS_3")) {
+        return "CHASSIS_3";
+      }
+      if (folder.contains("PRACTICE_2027")) {
+        return "PRACTICE_2027";
+      }
+      if (folder.contains("COMP_2027")) {
+        return "COMP_2027";
+      }
+      if (folder.contains("CORAL")) {
         return "CORAL";
       }
-      if (folder.toUpperCase(Locale.ROOT).contains("FUEL")) {
+      if (folder.contains("FUEL")) {
         return "FUEL";
       }
     }
@@ -793,9 +1144,13 @@ public record RobotProfile(
           findFirstMatchingTopic(
               allTopics,
               List.of(
+                  "Drive/Module" + idx + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + corner + "/DriveStatorCurrentAmps",
+                  "Drive/Module" + mappings[idx][3] + "/DriveStatorCurrentAmps",
                   "Drive/Module" + idx + "/DriveCurrentAmps",
                   "Drive/Module" + corner + "/DriveCurrentAmps",
                   "Drive/Module" + mappings[idx][3] + "/DriveCurrentAmps",
+                  "Swerve/Module" + idx + "/DriveStatorCurrentAmps",
                   "Swerve/Module" + idx + "/DriveCurrentAmps",
                   "Drive/DriveCurrentAmps[" + idx + "]"));
       String dSupply =
@@ -804,6 +1159,7 @@ public record RobotProfile(
               List.of(
                   "Drive/Module" + idx + "/DriveSupplyCurrentAmps",
                   "Drive/Module" + corner + "/DriveSupplyCurrentAmps",
+                  "Drive/Module" + mappings[idx][3] + "/DriveSupplyCurrentAmps",
                   "Drive/DriveSupplyCurrentAmps[" + idx + "]"));
       String dVel =
           findFirstMatchingTopic(
@@ -813,11 +1169,15 @@ public record RobotProfile(
                   "Drive/Module" + idx + "/DriveVelocityMetersPerSec",
                   "Drive/Module" + idx + "/DriveVelocityRps",
                   "Drive/Module" + corner + "/DriveVelocityRadPerSec",
-                  "Drive/Module" + corner + "/DriveVelocityMetersPerSec"));
+                  "Drive/Module" + corner + "/DriveVelocityMetersPerSec",
+                  "Drive/Module" + mappings[idx][3] + "/DriveVelocityRadPerSec"));
       String sStator =
           findFirstMatchingTopic(
               allTopics,
               List.of(
+                  "Drive/Module" + idx + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + corner + "/TurnStatorCurrentAmps",
+                  "Drive/Module" + mappings[idx][3] + "/TurnStatorCurrentAmps",
                   "Drive/Module" + idx + "/TurnCurrentAmps",
                   "Drive/Module" + idx + "/SteerCurrentAmps",
                   "Drive/Module" + corner + "/TurnCurrentAmps",
@@ -831,7 +1191,7 @@ public record RobotProfile(
                 idx + 5,
                 idx + 9,
                 dStator != null ? dStator : "",
-                dSupply != null ? dSupply : (dStator != null ? dStator : ""),
+                dSupply != null ? dSupply : "",
                 dVel != null ? dVel : "",
                 sStator != null ? sStator : ""));
       }
@@ -842,6 +1202,7 @@ public record RobotProfile(
   private static List<MechMotorSpec> discoverGenericMechanisms(Set<String> allTopics) {
     List<MechMotorSpec> mechs = new ArrayList<>();
     Map<String, String> statorBySubsys = new LinkedHashMap<>();
+    Map<String, String> supplyBySubsys = new LinkedHashMap<>();
     Map<String, String> velBySubsys = new LinkedHashMap<>();
     Map<String, String> posBySubsys = new LinkedHashMap<>();
 
@@ -851,6 +1212,23 @@ public record RobotProfile(
           || lower.contains("swerve")
           || lower.contains("module")
           || lower.contains("systemstats")
+          || lower.contains("powerdistribution")
+          || lower.contains("battery")
+          || lower.contains("driverstation")
+          || lower.contains("performance")
+          || lower.contains("loggedrobot")
+          || lower.contains("logger")
+          || lower.contains("vision")
+          || lower.contains("prematch")
+          || lower.contains("fluxfig")
+          || lower.contains("radiostatus")
+          || lower.contains("phoenix")
+          || lower.contains("networkinputs")
+          || lower.contains("realmetadata")
+          || lower.contains("superstructure")
+          || lower.contains("odometry")
+          || lower.contains("fuelsim")
+          || lower.contains("fluxaudit")
           || lower.contains("shopstress")
           || lower.contains("geofence")) {
         continue;
@@ -861,11 +1239,17 @@ public record RobotProfile(
       }
       String prefix = t.substring(0, lastSlash);
       String leaf = t.substring(lastSlash + 1).toLowerCase(Locale.ROOT);
-      if (leaf.contains("current") || leaf.contains("stator") || leaf.contains("amps")) {
-        statorBySubsys.putIfAbsent(prefix, t);
-      } else if (leaf.contains("velocity") || leaf.contains("rpm") || leaf.contains("rps")) {
+      if (leaf.contains("supply")) {
+        supplyBySubsys.putIfAbsent(prefix, t);
+      } else if (leaf.contains("stator") || leaf.contains("current") || leaf.contains("amps")) {
+        if (!leaf.contains("follower")) {
+          statorBySubsys.putIfAbsent(prefix, t);
+        }
+      } else if ((leaf.contains("velocity") || leaf.contains("rpm") || leaf.contains("rps"))
+          && !leaf.startsWith("target")) {
         velBySubsys.putIfAbsent(prefix, t);
-      } else if (leaf.contains("position") || leaf.contains("angle") || leaf.contains("height")) {
+      } else if ((leaf.contains("position") || leaf.contains("angle") || leaf.contains("height"))
+          && !leaf.startsWith("target")) {
         posBySubsys.putIfAbsent(prefix, t);
       }
     }
@@ -877,9 +1261,11 @@ public record RobotProfile(
       cleanName =
           cleanName
               .replace("AdvantageKit/RealOutputs/", "")
+              .replace("AdvantageKit/", "")
               .replace("RealOutputs/", "")
               .replace("Mechanisms/", "");
       String statorT = e.getValue();
+      String supplyT = supplyBySubsys.getOrDefault(prefix, "");
       String velT = velBySubsys.getOrDefault(prefix, "");
       String posT = posBySubsys.getOrDefault(prefix, "");
       boolean isShooter =
@@ -894,7 +1280,7 @@ public record RobotProfile(
               40.0,
               isShooter,
               statorT,
-              statorT,
+              supplyT,
               velT,
               posT,
               ""));

@@ -12,6 +12,9 @@ public final class BatteryAnalyzer {
 
   public static final double BROWNOUT_WARN_VOLTS = 7.0;
   public static final double BROWNOUT_CRIT_VOLTS = 6.8;
+  public static final int MIN_REGRESSION_SAMPLES = 10;
+  public static final double MIN_CURRENT_SPREAD_AMPS = 15.0;
+  public static final double MIN_R_SQUARED = 0.35;
 
   private BatteryAnalyzer() {}
 
@@ -35,7 +38,8 @@ public final class BatteryAnalyzer {
 
     double restingV = Double.NaN;
     for (TimelinePoint pt : timeline) {
-      if (!pt.enabled() && pt.totalSupplyAmps() < 5.0 && pt.batteryVoltage() > 11.0) {
+      double supply = Double.isFinite(pt.totalSupplyAmps()) ? pt.totalSupplyAmps() : 0.0;
+      if (!pt.enabled() && supply < 5.0 && Double.isFinite(pt.batteryVoltage()) && pt.batteryVoltage() > 11.0) {
         restingV = pt.batteryVoltage();
         break;
       }
@@ -51,7 +55,14 @@ public final class BatteryAnalyzer {
 
     for (int i = 0; i < timeline.size(); i++) {
       TimelinePoint pt = timeline.get(i);
+      double dt = (i > 0) ? (pt.timeSec() - timeline.get(i - 1).timeSec()) : 0.2;
       double v = pt.batteryVoltage();
+      if (Double.isFinite(pt.totalSupplyAmps()) && pt.totalSupplyAmps() > peakSupply) {
+        peakSupply = pt.totalSupplyAmps();
+      }
+      if (Double.isFinite(pt.totalDriveStatorAmps()) && pt.totalDriveStatorAmps() > peakDriveStator) {
+        peakDriveStator = pt.totalDriveStatorAmps();
+      }
       if (Double.isFinite(v) && v > 3.0) {
         if (v < minV) {
           minV = v;
@@ -59,6 +70,12 @@ public final class BatteryAnalyzer {
         }
         if (v > maxV) {
           maxV = v;
+        }
+        if (v < BROWNOUT_WARN_VOLTS) {
+          warnSec += dt;
+        }
+        if (v < BROWNOUT_CRIT_VOLTS) {
+          critSec += dt;
         }
       }
     }
@@ -72,8 +89,8 @@ public final class BatteryAnalyzer {
           0.0,
           Double.NaN,
           Double.NaN,
-          0.0,
-          0.0,
+          peakSupply,
+          peakDriveStator,
           0.0,
           0.0,
           enableDropouts,
@@ -82,92 +99,64 @@ public final class BatteryAnalyzer {
 
     boolean hasRestingV = Double.isFinite(restingV);
 
-    // Linear regression: V_drop = (restingV - V) vs I_effective, or 2-parameter OLS (V = Voc - R*I)
-    // when the log window contains no disabled resting sample.
+    // 2-parameter OLS regression V = Voc + slope * I (requiring slope < 0, R^2 >= 0.35,
+    // n >= 10, and current spread >= 15 A before clamping R_int to [8.0, 60.0] mOhm).
     double sumX = 0.0;
-    double sumY = 0.0;
     double sumXX = 0.0;
-    double sumXY = 0.0;
-    double sumYY = 0.0;
     double sumV = 0.0;
     double sumXV = 0.0;
     double sumVV = 0.0;
+    double minI = Double.POSITIVE_INFINITY;
+    double maxI = Double.NEGATIVE_INFINITY;
     int n = 0;
 
-    for (int i = 0; i < timeline.size(); i++) {
-      TimelinePoint pt = timeline.get(i);
-      double dt = (i > 0) ? (pt.timeSec() - timeline.get(i - 1).timeSec()) : 0.2;
+    for (TimelinePoint pt : timeline) {
       double v = pt.batteryVoltage();
-      double effSupply = Math.max(pt.totalSupplyAmps(), pt.totalDriveStatorAmps() * 0.38);
-      if (effSupply > peakSupply) {
-        peakSupply = effSupply;
-      }
-      if (pt.totalDriveStatorAmps() > peakDriveStator) {
-        peakDriveStator = pt.totalDriveStatorAmps();
-      }
-      if (Double.isFinite(v) && v > 3.0 && v < BROWNOUT_WARN_VOLTS) {
-        warnSec += dt;
-      }
-      if (Double.isFinite(v) && v > 3.0 && v < BROWNOUT_CRIT_VOLTS) {
-        critSec += dt;
-      }
-
-      if (pt.enabled() && effSupply > 15.0 && Double.isFinite(v) && v > 5.0) {
-        if (!hasRestingV || v <= restingV) {
-          double x = effSupply;
-          sumX += x;
-          sumXX += x * x;
-          sumV += v;
-          sumXV += x * v;
-          sumVV += v * v;
-          if (hasRestingV) {
-            double y = restingV - v;
-            sumY += y;
-            sumXY += x * y;
-            sumYY += y * y;
-          }
-          n++;
+      double supply = pt.totalSupplyAmps();
+      if (pt.enabled()
+          && Double.isFinite(supply)
+          && supply >= 5.0
+          && Double.isFinite(v)
+          && v > 5.0) {
+        sumX += supply;
+        sumXX += supply * supply;
+        sumV += v;
+        sumXV += supply * v;
+        sumVV += v * v;
+        if (supply < minI) {
+          minI = supply;
         }
+        if (supply > maxI) {
+          maxI = supply;
+        }
+        n++;
       }
     }
 
     double rintMilliOhms = Double.NaN;
     double rSquared = Double.NaN;
-    if (n >= 5 && sumXX > 1e-6) {
-      if (hasRestingV) {
-        double rintOhms = sumXY / sumXX;
-        rintMilliOhms = Math.max(8.0, Math.min(60.0, rintOhms * 1000.0));
-        double denom = (n * sumXX - sumX * sumX) * (n * sumYY - sumY * sumY);
-        if (denom > 1e-9) {
-          double num = (n * sumXY - sumX * sumY);
-          rSquared = Math.max(0.0, Math.min(1.0, (num * num) / denom));
-        } else {
-          rSquared = 0.0;
+    double currentSpread = (n > 0) ? (maxI - minI) : 0.0;
+    if (n >= MIN_REGRESSION_SAMPLES && currentSpread >= MIN_CURRENT_SPREAD_AMPS) {
+      double varX = n * sumXX - sumX * sumX;
+      double varV = n * sumVV - sumV * sumV;
+      if (varX > 1e-6 && varV > 1e-9) {
+        double covXV = n * sumXV - sumX * sumV;
+        double slope = covXV / varX;
+        double fitR2 = (covXV * covXV) / (varX * varV);
+        if (Double.isFinite(fitR2)) {
+          rSquared = Math.max(0.0, Math.min(1.0, fitR2));
         }
-      } else {
-        double varX = n * sumXX - sumX * sumX;
-        double varV = n * sumVV - sumV * sumV;
-        if (varX > 1.0) {
-          double slope = (n * sumXV - sumX * sumV) / varX;
-          double rintOhms = Math.max(0.0, -slope);
-          restingV = (sumV + rintOhms * sumX) / n;
-          rintMilliOhms = Math.max(8.0, Math.min(60.0, rintOhms * 1000.0));
-          double denom = varX * varV;
-          if (denom > 1e-9) {
-            double num = n * sumXV - sumX * sumV;
-            rSquared = Math.max(0.0, Math.min(1.0, (num * num) / denom));
-          } else {
-            rSquared = 0.0;
+        if (slope < 0.0 && Double.isFinite(rSquared) && rSquared >= MIN_R_SQUARED) {
+          double rintOhms = -slope;
+          if (!hasRestingV) {
+            restingV = (sumV + rintOhms * sumX) / n;
+            hasRestingV = Double.isFinite(restingV);
           }
-        } else {
-          restingV = Math.max(12.6, maxV);
-          double estSumXY = restingV * sumX - sumXV;
-          double rintOhms = estSumXY / sumXX;
           rintMilliOhms = Math.max(8.0, Math.min(60.0, rintOhms * 1000.0));
-          rSquared = 0.0;
         }
       }
-    } else if (!hasRestingV) {
+    }
+    if (!hasRestingV) {
       restingV = maxV;
     }
 

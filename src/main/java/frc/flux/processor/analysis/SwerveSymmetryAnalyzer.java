@@ -10,6 +10,9 @@ import java.util.List;
 /** 4-Corner Swerve drive and steer current symmetry analyzer. */
 public final class SwerveSymmetryAnalyzer {
 
+  /** 2027 per-module drive stator current safety ceiling (amps). */
+  public static final double DRIVE_STATOR_LIMIT_AMPS = 60.0;
+
   private SwerveSymmetryAnalyzer() {}
 
   public static List<CornerMetrics> analyze(
@@ -74,7 +77,7 @@ public final class SwerveSymmetryAnalyzer {
       String status = "PASS";
       if (Math.abs(asymPct) > 35.0) {
         status = "FAIL";
-      } else if (Math.abs(asymPct) > 22.0 || c.peakDriveStatorAmps() > 140.0) {
+      } else if (Math.abs(asymPct) > 22.0 || c.peakDriveStatorAmps() > DRIVE_STATOR_LIMIT_AMPS) {
         status = "WARN";
       }
       result.add(

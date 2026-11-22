@@ -31,7 +31,67 @@ public record RunAnalysisReport(
     ShopStressGateMetrics shopStressGate,
     List<ElevatorCycleEvent> elevatorCycles,
     List<CameraSnapshotRef> cameraSnapshots,
-    FuelSimMetrics fuelSim) {
+    FuelSimMetrics fuelSim,
+    CandidateTuningReview candidateTuning) {
+
+  public RunAnalysisReport(
+      String runId,
+      String robotName,
+      String matchType,
+      String allianceStation,
+      boolean isFmsMatch,
+      String namedBattery,
+      String gitSha,
+      String configSha,
+      String videoUrl,
+      double videoOffsetSeconds,
+      double totalDurationSec,
+      double enabledDurationSec,
+      double totalDistanceMeters,
+      double peakSpeedMps,
+      String overallVerdict,
+      List<String> keyAlerts,
+      BatteryMetrics battery,
+      List<CornerMetrics> swerveCorners,
+      List<MechanismMetrics> mechanisms,
+      List<ShotEvent> shots,
+      List<VoiceCorrelation> voiceCorrelations,
+      List<TimelinePoint> timeline,
+      SystemHealthMetrics systemHealth,
+      ShopStressGateMetrics shopStressGate,
+      List<ElevatorCycleEvent> elevatorCycles,
+      List<CameraSnapshotRef> cameraSnapshots,
+      FuelSimMetrics fuelSim) {
+    this(
+        runId,
+        robotName,
+        matchType,
+        allianceStation,
+        isFmsMatch,
+        namedBattery,
+        gitSha,
+        configSha,
+        videoUrl,
+        videoOffsetSeconds,
+        totalDurationSec,
+        enabledDurationSec,
+        totalDistanceMeters,
+        peakSpeedMps,
+        overallVerdict,
+        keyAlerts,
+        battery,
+        swerveCorners,
+        mechanisms,
+        shots,
+        voiceCorrelations,
+        timeline,
+        systemHealth,
+        shopStressGate,
+        elevatorCycles,
+        cameraSnapshots,
+        fuelSim,
+        null);
+  }
 
   public RunAnalysisReport(
       String runId,
@@ -384,4 +444,27 @@ public record RunAnalysisReport(
       int intakedCount,
       String lastShotBanner,
       double[] ballXyz) {}
+
+  /** Single modified parameter or relational table cell parsed from unmerged {@code tuned-snapshot.txt}. */
+  public record TuningDiffEntry(
+      String scope,
+      String key,
+      String baseValue,
+      String candidateValue,
+      boolean structural) {}
+
+  /**
+   * Evaluation of an unmerged {@code tuned-snapshot.txt} practice tuning capture against the
+   * {@code STABLE} baseline and live run telemetry, with an explicit {@code fluxfig.jar promote}
+   * command for human-approved promotion.
+   */
+  public record CandidateTuningReview(
+      boolean present,
+      String sourceFilePath,
+      String activeProfile,
+      String baseConfigSha,
+      String verdict,
+      List<String> verdictReasons,
+      List<TuningDiffEntry> entries,
+      String promoteCommand) {}
 }

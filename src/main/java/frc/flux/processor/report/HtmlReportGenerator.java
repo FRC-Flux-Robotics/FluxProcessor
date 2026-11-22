@@ -1,8 +1,10 @@
 package frc.flux.processor.report;
 
+import frc.flux.processor.analysis.RunAnalyzer;
 import frc.flux.processor.model.RunAnalysisReport;
 import frc.flux.processor.model.RunAnalysisReport.BatteryMetrics;
 import frc.flux.processor.model.RunAnalysisReport.CameraSnapshotRef;
+import frc.flux.processor.model.RunAnalysisReport.CandidateTuningReview;
 import frc.flux.processor.model.RunAnalysisReport.CornerMetrics;
 import frc.flux.processor.model.RunAnalysisReport.ElevatorCycleEvent;
 import frc.flux.processor.model.RunAnalysisReport.FuelSimMetrics;
@@ -14,6 +16,7 @@ import frc.flux.processor.model.RunAnalysisReport.Sim3DFrame;
 import frc.flux.processor.model.RunAnalysisReport.SystemHealthMetrics;
 import frc.flux.processor.model.RunAnalysisReport.SystemWatchDecision;
 import frc.flux.processor.model.RunAnalysisReport.TimelinePoint;
+import frc.flux.processor.model.RunAnalysisReport.TuningDiffEntry;
 import frc.flux.processor.model.RunAnalysisReport.VoiceCorrelation;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -23,14 +26,19 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Generates self-contained 1-page HTML reports ({@code report.html}), season summary index ({@code
- * runs-index.html} and {@code runs-index.csv}), and Named Battery Leaderboard ({@code
+ * Generates 100% offline-safe, XSS-clean 1-page HTML reports ({@code report.html}), season summary
+ * index ({@code runs-index.html} and {@code runs-index.csv}), and Named Battery Leaderboard ({@code
  * batteries-health.csv}) styled in FRC Team 10413 (FLUX Robotics) official colors.
  */
 public final class HtmlReportGenerator {
 
-  private static final String LOGO_URL =
-      "https://images.squarespace-cdn.com/content/v1/678bfe582830c94f0965d1b8/c581de14-67ff-442b-b36b-1959857c428e/Caitlin+B%26W+Logo+JPEG.jpg?format=1500w";
+  private static final String FLUX_LOGO_SVG =
+      "<svg class=\"logo\" viewBox=\"0 0 120 48\" width=\"120\" height=\"48\" role=\"img\" aria-label=\"FLUX Robotics 10413\">"
+          + "<rect x=\"1\" y=\"1\" width=\"118\" height=\"46\" rx=\"8\" fill=\"#212020\" stroke=\"#254BA0\" stroke-width=\"2\"/>"
+          + "<polygon points=\"14,34 24,12 36,12 29,24 38,24 20,40 24,28 16,28\" fill=\"#2B7BFF\"/>"
+          + "<text x=\"46\" y=\"25\" fill=\"#FFFFFF\" font-family=\"system-ui,-apple-system,sans-serif\" font-size=\"15\" font-weight=\"800\" letter-spacing=\"1\">FLUX</text>"
+          + "<text x=\"46\" y=\"39\" fill=\"#93C5FD\" font-family=\"ui-monospace,SFMono-Regular,monospace\" font-size=\"11\" font-weight=\"700\">FRC 10413</text>"
+          + "</svg>";
 
   private HtmlReportGenerator() {}
 
@@ -50,8 +58,6 @@ public final class HtmlReportGenerator {
         .append("  <title>FLUX 10413 Report — ")
         .append(esc(r.runId()))
         .append("</title>\n")
-        .append(
-            "  <link href=\"https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap\" rel=\"stylesheet\">\n")
         .append("  <style>\n")
         .append("    :root {\n")
         .append("      --black: #212020;\n")
@@ -64,12 +70,15 @@ public final class HtmlReportGenerator {
         .append("    }\n")
         .append("    * { box-sizing: border-box; margin: 0; padding: 0; }\n")
         .append(
-            "    body { font-family: 'Space Grotesk', system-ui, sans-serif; background: var(--bg); color: var(--black); padding: 20px; line-height: 1.45; }\n")
-        .append("    .container { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }\n")
+            "    body { font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--black); padding: 20px; line-height: 1.45; }\n")
+        .append(
+            "    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }\n")
+        .append(
+            "    .container { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }\n")
         .append(
             "    .header { background: var(--card); border-top: 6px solid var(--royal); border-radius: 10px; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n")
         .append("    .header-left { display: flex; align-items: center; gap: 16px; }\n")
-        .append("    .logo { height: 48px; width: auto; }\n")
+        .append("    .logo { height: 48px; width: auto; flex-shrink: 0; }\n")
         .append("    .title { font-size: 20px; font-weight: 700; color: var(--black); }\n")
         .append("    .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }\n")
         .append("    .badge { padding: 6px 14px; border-radius: 6px; font-weight: 700; font-size: 13px; color: #FFF; }\n")
@@ -83,7 +92,7 @@ public final class HtmlReportGenerator {
         .append("    .alerts ul { margin-left: 18px; font-size: 13px; }\n")
         .append("    .alerts li { margin-bottom: 4px; }\n")
         .append("    .card { background: var(--card); border-radius: 10px; padding: 16px 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }\n")
-        .append("    .card h2 { font-size: 16px; font-weight: 700; color: var(--black); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid var(--silver); display: flex; justify-content: space-between; align-items: center; }\n")
+        .append("    .card h2 { font-size: 16px; font-weight: 700; color: var(--black); margin-bottom: 10px; padding-bottom: 6px; border-bottom: 2px solid var(--silver); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }\n")
         .append("    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }\n")
         .append("    @media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }\n")
         .append("    table { width: 100%; border-collapse: collapse; font-size: 12px; }\n")
@@ -96,14 +105,17 @@ public final class HtmlReportGenerator {
         .append("    .pill-fail { background: #FEE2E2; color: #991B1B; }\n")
         .append("    .btn-link { display: inline-block; background: var(--royal); color: #FFF; text-decoration: none; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }\n")
         .append("    .btn-link:hover { background: var(--flux-blue); }\n")
+        .append("    .cmd-box { background: #0F172A; color: #E2E8F0; border-radius: 6px; padding: 10px 12px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }\n")
+        .append("    .cmd-box code { white-space: pre-wrap; word-break: break-all; }\n")
+        .append("    .tuning-reasons { margin: 8px 0 12px 18px; font-size: 12px; color: var(--black); }\n")
+        .append("    .tuning-reasons li { margin-bottom: 4px; }\n")
         .append("    canvas { width: 100%; height: 220px; background: #18181B; border-radius: 8px; display: block; }\n")
         .append("  </style>\n")
-        .append("  <script src=\"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js\"></script>\n")
         .append("</head>\n<body>\n<div class=\"container\">\n");
 
     sb.append("  <div class=\"header\">\n")
         .append("    <div class=\"header-left\">\n")
-        .append("      <img class=\"logo\" src=\"").append(LOGO_URL).append("\" alt=\"FLUX Robotics\">\n")
+        .append("      ").append(FLUX_LOGO_SVG).append("\n")
         .append("      <div>\n")
         .append("        <div class=\"title\">")
         .append(esc(r.runId()))
@@ -198,6 +210,88 @@ public final class HtmlReportGenerator {
     }
     sb.append("  </div>\n");
 
+    // Candidate Practice Tuning Diff (Unmerged) Panel
+    if (r.candidateTuning() != null && r.candidateTuning().present()) {
+      CandidateTuningReview ct = r.candidateTuning();
+      String ctPill =
+          "DO_NOT_PROMOTE".equals(ct.verdict())
+              ? "pill-fail"
+              : ("REVIEW_WARNINGS".equals(ct.verdict()) ? "pill-warn" : "pill-pass");
+      String borderCol =
+          "DO_NOT_PROMOTE".equals(ct.verdict())
+              ? "#DC2626"
+              : ("REVIEW_WARNINGS".equals(ct.verdict()) ? "#D97706" : "#16A34A");
+      sb.append("  <div class=\"card\" id=\"candidateTuningCard\" style=\"border-left: 5px solid ")
+          .append(borderCol)
+          .append("\">\n")
+          .append("    <h2><span>Candidate Practice Tuning Diff (Unmerged)</span>")
+          .append("<span class=\"pill ")
+          .append(ctPill)
+          .append("\">")
+          .append(esc(ct.verdict()))
+          .append("</span></h2>\n")
+          .append("    <div class=\"subtitle\" style=\"margin-bottom:8px;\">Snapshot: <code>")
+          .append(esc(ct.sourceFilePath()))
+          .append("</code>  •  Profile: <strong>")
+          .append(esc(ct.activeProfile()))
+          .append("</strong>  •  STABLE Base SHA: <code>")
+          .append(esc(ct.baseConfigSha()))
+          .append("</code>  •  Overrides: <strong>")
+          .append(ct.entries().size())
+          .append("</strong></div>\n");
+
+      if (!ct.verdictReasons().isEmpty()) {
+        sb.append("    <ul class=\"tuning-reasons\">\n");
+        for (String reason : ct.verdictReasons()) {
+          sb.append("      <li>").append(esc(reason)).append("</li>\n");
+        }
+        sb.append("    </ul>\n");
+      }
+
+      if (!ct.entries().isEmpty()) {
+        sb.append("    <table>\n")
+            .append(
+                "      <thead><tr><th>Scope</th><th>Parameter / Cell</th><th>STABLE Base</th><th>Candidate Value</th><th>Safety Gate</th></tr></thead>\n")
+            .append("      <tbody>\n");
+        for (TuningDiffEntry entry : ct.entries()) {
+          String gatePill = entry.structural() ? "pill-fail" : "pill-pass";
+          String gateLabel = entry.structural() ? "STRUCTURAL (BLOCKED)" : "TUNABLE";
+          sb.append("        <tr>\n")
+              .append("          <td><code>")
+              .append(esc(entry.scope()))
+              .append("</code></td>\n")
+              .append("          <td><strong><code>")
+              .append(esc(entry.key()))
+              .append("</code></strong></td>\n")
+              .append("          <td><code>")
+              .append(esc(entry.baseValue()))
+              .append("</code></td>\n")
+              .append("          <td><code>")
+              .append(esc(entry.candidateValue()))
+              .append("</code></td>\n")
+              .append("          <td><span class=\"pill ")
+              .append(gatePill)
+              .append("\">")
+              .append(gateLabel)
+              .append("</span></td>\n")
+              .append("        </tr>\n");
+        }
+        sb.append("      </tbody>\n    </table>\n");
+      }
+
+      String cmdLabel =
+          "DO_NOT_PROMOTE".equals(ct.verdict())
+              ? "Blocked — Do Not Promote Until Findings Are Resolved (Reference CLI):"
+              : "Promote Gate CLI (Run Manually After Review):";
+      sb.append("    <div style=\"font-size:12px;font-weight:700;margin-top:12px;color:var(--muted);\">")
+          .append(esc(cmdLabel))
+          .append("</div>\n")
+          .append("    <div class=\"cmd-box\"><code id=\"promoteCmdText\">")
+          .append(esc(ct.promoteCommand()))
+          .append("</code><button id=\"copyPromoteBtn\" class=\"btn-link\" type=\"button\" style=\"border:none;cursor:pointer;padding:5px 10px;\">Copy Command</button></div>\n")
+          .append("  </div>\n");
+    }
+
     // Interactive Timeline Canvas
     sb.append("  <div class=\"card\">\n")
         .append(
@@ -207,52 +301,54 @@ public final class HtmlReportGenerator {
         .append("    <canvas id=\"timelineCanvas\" width=\"1180\" height=\"220\"></canvas>\n")
         .append("  </div>\n");
 
-    // Interactive 3D Match Replay & Game-Piece Visualizer Card
+    // Offline Interactive Canvas Field Replay & Game-Piece Visualizer Card
     if (r.fuelSim() != null && r.fuelSim().frames() != null && !r.fuelSim().frames().isEmpty()) {
-      String mp4File = r.fuelSim().videoFileName();
+      String mp4File = sanitizeRelativePath(r.fuelSim().videoFileName());
       sb.append("  <div class=\"card\" id=\"sim3dCard\">\n")
-          .append("    <h2><span>3D CAD Match Replay &amp; 2026 REBUILT FuelSim Arena (")
+          .append("    <h2><span>Offline Match Replay &amp; 2026 REBUILT FuelSim Arena (")
           .append(r.fuelSim().ballsScoredInHub())
           .append(" / ")
           .append(r.fuelSim().ballsLaunched())
           .append(" Scored in Hub)</span><span style=\"display:flex;gap:8px;align-items:center\">");
-      if (mp4File != null && !mp4File.isEmpty()) {
+      if (!mp4File.isEmpty()) {
         sb.append("<a class=\"btn-link\" style=\"background:#16A34A;padding:5px 10px\" download href=\"")
             .append(esc(mp4File))
-            .append("\">⬇ Download ")
+            .append("\">Download ")
             .append(esc(mp4File))
-            .append(" (1280x720 HD)</a>");
+            .append(" (HD)</a>");
       }
       sb.append(
-              "<button id=\"simRecBtn\" class=\"btn-link\" style=\"border:none;cursor:pointer;padding:5px 10px;background:#7C3AED\">🎬 Record Clip (.webm)</button>")
+              "<button id=\"simRecBtn\" class=\"btn-link\" type=\"button\" style=\"border:none;cursor:pointer;padding:5px 10px;background:#7C3AED\">Record Clip (.webm)</button>")
           .append("</span></h2>\n");
-      if (mp4File != null && !mp4File.isEmpty()) {
+      if (!mp4File.isEmpty()) {
         sb.append(
-                "    <div style=\"margin-bottom:14px;\"><div style=\"font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;\">🎬 Hardware-Accelerated MuJoCo 3.15 OpenGL/EGL 14-Mesh CAD Replay Video (4096×4096 Shadows + PiP OV9281 &amp; 3rd-Person Chase Cams):</div>\n")
+                "    <div style=\"margin-bottom:14px;\"><div style=\"font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;\">Rendered Replay Video:</div>\n")
             .append(
                 "    <video controls preload=\"metadata\" poster=\"preview-3d.png\" style=\"width:100%;max-height:560px;border-radius:8px;background:#090D16;box-shadow:0 4px 14px rgba(0,0,0,0.22);\" src=\"")
             .append(esc(mp4File))
             .append("\"></video></div>\n");
       }
       sb.append(
-              "    <div style=\"font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;\">🕹 Interactive Three.js WebGL PBR 3D Arena &amp; Articulated CAD Robot Explorer (Drag to Orbit, Scroll to Zoom):</div>\n")
+              "    <div style=\"font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;\">Interactive Offline Canvas Field &amp; Replay Explorer (Drag to Orbit Isometric View, Scroll to Zoom):</div>\n")
           .append(
               "    <div style=\"display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;background:#F8F9FB;padding:8px 12px;border-radius:6px;border:1px solid var(--silver);font-size:12px;\">\n")
           .append(
-              "      <button id=\"simPlayBtn\" class=\"btn-link\" style=\"border:none;cursor:pointer;padding:5px 12px;font-size:12px;\">▶ Play</button>\n")
+              "      <button id=\"simPlayBtn\" class=\"btn-link\" type=\"button\" style=\"border:none;cursor:pointer;padding:5px 12px;font-size:12px;\">Play</button>\n")
           .append(
               "      <input id=\"simScrub\" type=\"range\" min=\"0\" max=\"100\" value=\"0\" style=\"flex:1;min-width:180px;cursor:pointer;\">\n")
           .append(
               "      <span id=\"simTimeLabel\" style=\"font-family:monospace;font-weight:700;min-width:110px;\">0.0s / 0.0s</span>\n")
-          .append("      <label>Speed: <select id=\"simSpeed\" style=\"padding:3px 6px;border-radius:4px;\"><option value=\"0.5\">0.5x</option><option value=\"1\" selected>1x</option><option value=\"2\">2x</option><option value=\"4\">4x</option></select></label>\n")
-          .append("      <label>Camera: <select id=\"simCamMode\" style=\"padding:3px 6px;border-radius:4px;\"><option value=\"iso\" selected>Cinema Orbit 3D (Drag to Rotate)</option><option value=\"side\">Broadcast Side</option><option value=\"top\">Top-Down Overhead</option><option value=\"follow\">3rd-Person Chase Cam</option></select></label>\n")
+          .append(
+              "      <label>Speed: <select id=\"simSpeed\" style=\"padding:3px 6px;border-radius:4px;\"><option value=\"0.5\">0.5x</option><option value=\"1\" selected>1x</option><option value=\"2\">2x</option><option value=\"4\">4x</option></select></label>\n")
+          .append(
+              "      <label>Camera: <select id=\"simCamMode\" style=\"padding:3px 6px;border-radius:4px;\"><option value=\"iso\" selected>Isometric 2.5D (Drag to Rotate)</option><option value=\"top\">Top-Down 2D Field</option><option value=\"side\">Broadcast Side Elevation</option><option value=\"follow\">Robot Chase View</option></select></label>\n")
           .append("    </div>\n")
           .append(
               "    <div style=\"position:relative;\"><canvas id=\"sim3dCanvas\" width=\"1180\" height=\"500\" style=\"height:500px;background:#0b0f19;cursor:grab;border-radius:8px;\"></canvas>\n")
           .append(
-              "    <div id=\"sim3dHudTop\" style=\"position:absolute;top:12px;left:14px;right:14px;display:flex;justify-content:space-between;pointer-events:none;font-family:monospace;font-size:13px;font-weight:700;color:#F8FAFC;background:rgba(10,15,28,0.82);padding:8px 14px;border-radius:8px;border:1px solid rgba(56,189,248,0.35);\"></div>\n")
+              "    <div id=\"sim3dHudTop\" style=\"position:absolute;top:12px;left:14px;right:14px;display:flex;justify-content:space-between;pointer-events:none;font-family:monospace;font-size:13px;font-weight:700;color:#F8FAFC;background:rgba(10,15,28,0.86);padding:8px 14px;border-radius:8px;border:1px solid rgba(56,189,248,0.35);\"></div>\n")
           .append(
-              "    <div id=\"sim3dHudBot\" style=\"position:absolute;bottom:12px;left:14px;right:14px;display:flex;justify-content:space-between;pointer-events:none;font-family:monospace;font-size:12px;font-weight:600;color:#CBD5E1;background:rgba(10,15,28,0.82);padding:7px 14px;border-radius:8px;border:1px solid rgba(148,163,184,0.25);\"></div></div>\n")
+              "    <div id=\"sim3dHudBot\" style=\"position:absolute;bottom:12px;left:14px;right:14px;display:flex;justify-content:space-between;pointer-events:none;font-family:monospace;font-size:12px;font-weight:600;color:#CBD5E1;background:rgba(10,15,28,0.86);padding:7px 14px;border-radius:8px;border:1px solid rgba(148,163,184,0.25);\"></div></div>\n")
           .append("  </div>\n");
     }
 
@@ -311,6 +407,7 @@ public final class HtmlReportGenerator {
           "CRITICAL".equals(vc.severity())
               ? "pill-fail"
               : ("WARN".equals(vc.severity()) ? "pill-warn" : "pill-pass");
+      String safeVideoLink = sanitizeExternalUrl(vc.videoLink());
       sb.append("        <tr>\n")
           .append("          <td><span class=\"pill ")
           .append(pillClass)
@@ -331,10 +428,10 @@ public final class HtmlReportGenerator {
           .append("</td>\n")
           .append("          <td>")
           .append(
-              vc.videoLink() != null && !vc.videoLink().isEmpty()
-                  ? "<a class=\"btn-link\" target=\"_blank\" href=\""
-                      + esc(vc.videoLink())
-                      + "\">▶ Watch</a>"
+              !safeVideoLink.isEmpty()
+                  ? "<a class=\"btn-link\" target=\"_blank\" rel=\"noopener noreferrer\" href=\""
+                      + esc(safeVideoLink)
+                      + "\">Watch</a>"
                   : "—")
           .append("</td>\n")
           .append("        </tr>\n");
@@ -466,7 +563,7 @@ public final class HtmlReportGenerator {
             .append(String.format(Locale.US, "%.1f A", ec.peakStatorAmps()))
             .append("</td>\n")
             .append("          <td>")
-            .append(String.format(Locale.US, "%.2f V", ec.minBatteryVoltage()))
+            .append(fmtFinite(ec.minBatteryVoltage(), "%.2f V", "N/A"))
             .append("</td>\n")
             .append("          <td>")
             .append(ec.keepOutInterlockTriggered() ? "TRIGGERED" : "CLEAR")
@@ -486,10 +583,10 @@ public final class HtmlReportGenerator {
         .append("    <h2><span>Detected Shot / Feed Events (")
         .append(r.shots().size())
         .append(
-            ")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">Triggered when Feeder + Shooter Flywheels are active simultaneously • Replayable in 3D via /FuelSim/Fuels</span></h2>\n")
+            ")</span><span style=\"font-size:12px;font-weight:400;color:var(--muted)\">Triggered when Feeder + Shooter Flywheels are active simultaneously • Replayable offline via /FuelSim/Fuels</span></h2>\n")
         .append("    <table>\n")
         .append(
-            "      <thead><tr><th>Shot #</th><th>Time (s)</th><th>Duration</th><th>Shooter Left (RPS)</th><th>Shooter Right (RPS)</th><th>L/R Δ (RPS)</th><th>Hood Pos (rot)</th><th>Feeder Peak (A)</th><th>Min Battery (V)</th><th>Status</th><th>3D FuelSim Outcome</th><th>Video</th></tr></thead>\n")
+            "      <thead><tr><th>Shot #</th><th>Time (s)</th><th>Duration</th><th>Shooter Left (RPS)</th><th>Shooter Right (RPS)</th><th>L/R Δ (RPS)</th><th>Hood Pos (rot)</th><th>Feeder Peak (A)</th><th>Min Battery (V)</th><th>Status</th><th>FuelSim Outcome</th><th>Video</th></tr></thead>\n")
         .append("      <tbody>\n");
     for (ShotEvent s : r.shots()) {
       String pill = "NOMINAL".equals(s.status()) ? "pill-pass" : "pill-warn";
@@ -518,6 +615,7 @@ public final class HtmlReportGenerator {
                   esc(simSum.outcome()),
                   simSum.launchDistanceM(),
                   simSum.launchSpeedMps());
+      String safeShotLink = sanitizeExternalUrl(s.videoLink());
       sb.append("        <tr>\n")
           .append("          <td><strong>#")
           .append(s.shotNumber())
@@ -544,7 +642,7 @@ public final class HtmlReportGenerator {
           .append(String.format(Locale.US, "%.1f A", s.feederPeakStatorAmps()))
           .append("</td>\n")
           .append("          <td>")
-          .append(String.format(Locale.US, "%.2f V", s.minBatteryVoltageDuringShot()))
+          .append(fmtFinite(s.minBatteryVoltageDuringShot(), "%.2f V", "N/A"))
           .append("</td>\n")
           .append("          <td><span class=\"pill ")
           .append(pill)
@@ -558,13 +656,13 @@ public final class HtmlReportGenerator {
           .append(
               String.format(
                   Locale.US,
-                  "<button class=\"btn-link\" style=\"border:none;cursor:pointer\" onclick=\"if(window.seekSim3D)window.seekSim3D(%.2f)\">🎯 3D</button>",
+                  "<button class=\"btn-link\" type=\"button\" style=\"border:none;cursor:pointer\" onclick=\"if(window.seekSim3D)window.seekSim3D(%.2f)\">Replay</button>",
                   Math.max(0.0, s.timestampSec() - 0.5)))
           .append(
-              s.videoLink() != null && !s.videoLink().isEmpty()
-                  ? "<a class=\"btn-link\" target=\"_blank\" href=\""
-                      + esc(s.videoLink())
-                      + "\">▶ Clip</a>"
+              !safeShotLink.isEmpty()
+                  ? "<a class=\"btn-link\" target=\"_blank\" rel=\"noopener noreferrer\" href=\""
+                      + esc(safeShotLink)
+                      + "\">Clip</a>"
                   : "")
           .append("</td>\n")
           .append("        </tr>\n");
@@ -583,6 +681,7 @@ public final class HtmlReportGenerator {
               "      <thead><tr><th>Timestamp</th><th>Camera</th><th>Trigger Reason</th><th>File</th><th>Preview</th></tr></thead>\n")
           .append("      <tbody>\n");
       for (CameraSnapshotRef snap : r.cameraSnapshots()) {
+        String safeSnapHref = sanitizeRelativePath(snap.relativePath());
         sb.append("        <tr>\n")
             .append("          <td><strong>")
             .append(String.format(Locale.US, "%.2fs", snap.timestampSec()))
@@ -596,9 +695,14 @@ public final class HtmlReportGenerator {
             .append("          <td><code>")
             .append(esc(snap.fileName()))
             .append("</code></td>\n")
-            .append("          <td><a class=\"btn-link\" target=\"_blank\" href=\"")
-            .append(esc(snap.relativePath()))
-            .append("\">View Frame</a></td>\n")
+            .append("          <td>")
+            .append(
+                !safeSnapHref.isEmpty()
+                    ? "<a class=\"btn-link\" target=\"_blank\" rel=\"noopener noreferrer\" href=\""
+                        + esc(safeSnapHref)
+                        + "\">View Frame</a>"
+                    : "—")
+            .append("</td>\n")
             .append("        </tr>\n");
       }
       sb.append("      </tbody>\n    </table>\n  </div>\n");
@@ -679,18 +783,32 @@ public final class HtmlReportGenerator {
       sb.append("  </div>\n");
     }
 
-    // Inline JS to draw timeline canvas
-    sb.append("</div>\n<script>\nconst timeline = [\n");
+    // Inline JS for copy button, timeline canvas, and 100% offline 2.5D Canvas replay viewer
+    sb.append("</div>\n<script>\n");
+    sb.append("(function(){\n")
+        .append("  const copyBtn = document.getElementById('copyPromoteBtn');\n")
+        .append("  const cmdEl = document.getElementById('promoteCmdText');\n")
+        .append("  if (copyBtn && cmdEl && navigator.clipboard) {\n")
+        .append("    copyBtn.addEventListener('click', () => {\n")
+        .append("      navigator.clipboard.writeText(cmdEl.textContent || '').then(() => {\n")
+        .append("        copyBtn.textContent = 'Copied';\n")
+        .append("        setTimeout(() => { copyBtn.textContent = 'Copy Command'; }, 1600);\n")
+        .append("      });\n")
+        .append("    });\n")
+        .append("  }\n")
+        .append("})();\n");
+
+    sb.append("const timeline = [\n");
     for (int i = 0; i < r.timeline().size(); i++) {
       TimelinePoint pt = r.timeline().get(i);
       sb.append(
           String.format(
               Locale.US,
-              "[%.2f,%.2f,%.1f,%.1f,%d]%s",
-              pt.timeSec(),
-              pt.batteryVoltage(),
-              pt.totalDriveStatorAmps(),
-              pt.shooterLeftRps(),
+              "[%s,%s,%s,%s,%d]%s",
+              jsNum(pt.timeSec(), "%.2f"),
+              jsNum(pt.batteryVoltage(), "%.2f"),
+              jsNum(pt.totalDriveStatorAmps(), "%.1f"),
+              jsNum(pt.shooterLeftRps(), "%.1f"),
               pt.enabled() ? 1 : 0,
               (i + 1 < r.timeline().size()) ? "," : ""));
     }
@@ -699,8 +817,8 @@ public final class HtmlReportGenerator {
       sb.append(
           String.format(
               Locale.US,
-              "%.2f%s",
-              r.shots().get(i).timestampSec(),
+              "%s%s",
+              jsNum(r.shots().get(i).timestampSec(), "%.2f"),
               (i + 1 < r.shots().size()) ? "," : ""));
     }
     sb.append("];\n")
@@ -714,33 +832,33 @@ public final class HtmlReportGenerator {
         .append("  const xOf = t => padL + (t / maxT) * plotW;\n")
         .append("  const yVolt = v => padT + (1 - (Math.max(4, Math.min(14, v)) - 4) / 10) * plotH;\n")
         .append("  const yAmps = a => padT + (1 - Math.min(600, a) / 600) * plotH;\n")
-        .append("  // Draw 6.8V brownout line\n")
         .append("  ctx.strokeStyle = '#EF4444'; ctx.setLineDash([5, 5]); ctx.lineWidth = 1;\n")
         .append("  ctx.beginPath(); ctx.moveTo(padL, yVolt(6.8)); ctx.lineTo(W - padR, yVolt(6.8)); ctx.stroke();\n")
         .append("  ctx.setLineDash([]);\n")
-        .append("  // Draw Total Drive Stator Amps (Blue)\n")
         .append("  ctx.strokeStyle = '#2B7BFF'; ctx.lineWidth = 1.5; ctx.beginPath();\n")
-        .append(
-            "  timeline.forEach((p, i) => { const x = xOf(p[0]), y = yAmps(p[2]); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });\n")
+        .append("  let startedA = false;\n")
+        .append("  timeline.forEach(p => {\n")
+        .append("    if (p[2] === null) { startedA = false; return; }\n")
+        .append("    const x = xOf(p[0]), y = yAmps(p[2]);\n")
+        .append("    if (!startedA) { ctx.moveTo(x, y); startedA = true; } else { ctx.lineTo(x, y); }\n")
+        .append("  });\n")
         .append("  ctx.stroke();\n")
-        .append("  // Draw Battery Voltage (Green)\n")
         .append("  ctx.strokeStyle = '#22C55E'; ctx.lineWidth = 2; ctx.beginPath();\n")
-        .append(
-            "  timeline.forEach((p, i) => { const x = xOf(p[0]), y = yVolt(p[1]); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });\n")
+        .append("  let startedV = false;\n")
+        .append("  timeline.forEach(p => {\n")
+        .append("    if (p[1] === null) { startedV = false; return; }\n")
+        .append("    const x = xOf(p[0]), y = yVolt(p[1]);\n")
+        .append("    if (!startedV) { ctx.moveTo(x, y); startedV = true; } else { ctx.lineTo(x, y); }\n")
+        .append("  });\n")
         .append("  ctx.stroke();\n")
-        .append("  // Draw Shot Markers (Gold)\n")
         .append("  ctx.fillStyle = '#F59E0B';\n")
-        .append(
-            "  shots.forEach(t => { const x = xOf(t); ctx.beginPath(); ctx.arc(x, padT + 8, 4, 0, Math.PI*2); ctx.fill(); });\n")
-        .append("  // Axes labels\n")
+        .append("  shots.forEach(t => { if (t === null) return; const x = xOf(t); ctx.beginPath(); ctx.arc(x, padT + 8, 4, 0, Math.PI*2); ctx.fill(); });\n")
         .append("  ctx.fillStyle = '#A1A1AA'; ctx.font = '11px sans-serif';\n")
-        .append(
-            "  ctx.fillText('14V', 12, yVolt(14)+4); ctx.fillText('10V', 12, yVolt(10)+4); ctx.fillText('6.8V', 8, yVolt(6.8)+4);\n")
-        .append(
-            "  ctx.fillText('600A', W-42, yAmps(600)+4); ctx.fillText('300A', W-42, yAmps(300)+4); ctx.fillText('0A', W-42, yAmps(0)+4);\n")
+        .append("  ctx.fillText('14V', 12, yVolt(14)+4); ctx.fillText('10V', 12, yVolt(10)+4); ctx.fillText('6.8V', 8, yVolt(6.8)+4);\n")
+        .append("  ctx.fillText('600A', W-42, yAmps(600)+4); ctx.fillText('300A', W-42, yAmps(300)+4); ctx.fillText('0A', W-42, yAmps(0)+4);\n")
         .append("})();\n");
 
-    // Inline 3D FuelSim Arena Canvas Player & Browser WebM Video Recorder
+    // 100% Offline Pure Canvas 2D / Isometric 2.5D FuelSim Arena Player (zero external CDNs, zero innerHTML)
     if (r.fuelSim() != null && r.fuelSim().frames() != null && !r.fuelSim().frames().isEmpty()) {
       boolean isBlue =
           r.allianceStation() == null
@@ -752,17 +870,17 @@ public final class HtmlReportGenerator {
         sb.append(
             String.format(
                 Locale.US,
-                "[%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%.1f,%.2f,%.2f,%.2f,%d,%d,%d,\"%s\",[",
-                sf.timeSec(),
-                sf.robotX(),
-                sf.robotY(),
-                sf.robotHeadingRad(),
-                sf.batteryVoltage(),
-                sf.driveStatorAmps(),
-                sf.shooterRps(),
-                sf.hoodRot(),
-                sf.elevatorHeightM(),
-                sf.armAngleRad(),
+                "[%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%d,%d,%d,\"%s\",[",
+                jsNum(sf.timeSec(), "%.2f"),
+                jsNum(sf.robotX(), "%.2f"),
+                jsNum(sf.robotY(), "%.2f"),
+                jsNum(sf.robotHeadingRad(), "%.3f"),
+                jsNum(sf.batteryVoltage(), "%.2f"),
+                jsNum(sf.driveStatorAmps(), "%.0f"),
+                jsNum(sf.shooterRps(), "%.1f"),
+                jsNum(sf.hoodRot(), "%.2f"),
+                jsNum(sf.elevatorHeightM(), "%.2f"),
+                jsNum(sf.armAngleRad(), "%.2f"),
                 sf.blueScore(),
                 sf.redScore(),
                 sf.intakedCount(),
@@ -772,7 +890,7 @@ public final class HtmlReportGenerator {
           for (int bIdx = 0; bIdx < bxyz.length; bIdx++) {
             sb.append(
                 String.format(
-                    Locale.US, "%.2f%s", bxyz[bIdx], (bIdx + 1 < bxyz.length) ? "," : ""));
+                    Locale.US, "%s%s", jsNum(bxyz[bIdx], "%.2f"), (bIdx + 1 < bxyz.length) ? "," : ""));
           }
         }
         sb.append("]]").append((i + 1 < frames.size()) ? ",\n" : "\n");
@@ -781,6 +899,7 @@ public final class HtmlReportGenerator {
           .append("(function(){\n")
           .append("  const c = document.getElementById('sim3dCanvas');\n")
           .append("  if (!c || sim3dFrames.length === 0) return;\n")
+          .append("  const ctx = c.getContext('2d');\n")
           .append("  const playBtn = document.getElementById('simPlayBtn');\n")
           .append("  const scrub = document.getElementById('simScrub');\n")
           .append("  const timeLbl = document.getElementById('simTimeLabel');\n")
@@ -790,156 +909,153 @@ public final class HtmlReportGenerator {
           .append("  const hudTop = document.getElementById('sim3dHudTop');\n")
           .append("  const hudBot = document.getElementById('sim3dHudBot');\n")
           .append("  const isBlue = ").append(isBlue ? "true" : "false").append(";\n")
+          .append("  const L = 16.541, W = 8.069;\n")
           .append("  scrub.max = sim3dFrames.length - 1;\n")
-          .append("  let idx = 0, playing = false, lastTs = 0, camYaw = isBlue ? -2.25 : -0.89, camPitch = 0.46, camDist = 5.6, dragging = false, dragX = 0, dragY = 0;\n")
-          .append("  c.addEventListener('mousedown', e => { dragging = true; dragX = e.clientX; dragY = e.clientY; c.style.cursor='grabbing'; });\n")
-          .append("  window.addEventListener('mouseup', () => { dragging = false; c.style.cursor='grab'; });\n")
-          .append("  window.addEventListener('mousemove', e => { if(!dragging) return; camYaw -= (e.clientX - dragX)*0.007; camPitch = Math.max(0.14, Math.min(1.48, camPitch + (e.clientY - dragY)*0.007)); dragX = e.clientX; dragY = e.clientY; draw(); });\n")
-          .append("  c.addEventListener('wheel', e => { e.preventDefault(); camDist = Math.max(2.2, Math.min(16.0, camDist + e.deltaY * 0.004)); draw(); }, {passive:false});\n")
-          .append("  camSel.addEventListener('change', () => { if(camSel.value==='side'){camYaw=-Math.PI/2;camPitch=0.45;camDist=9.5;} else if(camSel.value==='top'){camYaw=-Math.PI/2;camPitch=1.50;camDist=11.5;} else if(camSel.value==='follow'){camDist=3.2;camPitch=0.42;} else {camYaw=isBlue?-2.25:-0.89;camPitch=0.46;camDist=5.6;} draw(); });\n")
-          .append("  // Initialize Three.js WebGL PBR + Shadow-Mapped 3D Scene (if THREE loaded)\n")
-          .append("  let glRenderer = null, scene = null, camera = null, robotGroup = null, tilterGroup = null, hoodMesh = null, elevGroup = null, armGroup = null, ballMeshes = [], trailMeshes = [];\n")
-          .append("  if (window.THREE) {\n")
-          .append("    try {\n")
-          .append("      const THREE = window.THREE;\n")
-          .append("      glRenderer = new THREE.WebGLRenderer({ canvas: c, antialias: true, preserveDrawingBuffer: true });\n")
-          .append("      glRenderer.setSize(c.width, c.height, false);\n")
-          .append("      glRenderer.shadowMap.enabled = true;\n")
-          .append("      glRenderer.shadowMap.type = THREE.PCFSoftShadowMap;\n")
-          .append("      glRenderer.toneMapping = THREE.ACESFilmicToneMapping;\n")
-          .append("      glRenderer.toneMappingExposure = 1.12;\n")
-          .append("      scene = new THREE.Scene();\n")
-          .append("      scene.background = new THREE.Color(0x0b0f19);\n")
-          .append("      scene.fog = new THREE.FogExp2(0x0b0f19, 0.025);\n")
-          .append("      camera = new THREE.PerspectiveCamera(46, c.width / c.height, 0.05, 50);\n")
-          .append("      camera.up.set(0, 0, 1);\n")
-          .append("      scene.add(new THREE.HemisphereLight(0xdbeafe, 0x1e293b, 0.75));\n")
-          .append("      const dirLight = new THREE.DirectionalLight(0xffffff, 1.35);\n")
-          .append("      dirLight.position.set(5.5, 2.2, 8.5);\n")
-          .append("      dirLight.castShadow = true;\n")
-          .append("      dirLight.shadow.mapSize.width = 2048; dirLight.shadow.mapSize.height = 2048;\n")
-          .append("      dirLight.shadow.camera.near = 1; dirLight.shadow.camera.far = 22;\n")
-          .append("      dirLight.shadow.camera.left = -10; dirLight.shadow.camera.right = 10; dirLight.shadow.camera.top = 6; dirLight.shadow.camera.bottom = -6;\n")
-          .append("      dirLight.target.position.set(8.27, 4.035, 0);\n")
-          .append("      scene.add(dirLight); scene.add(dirLight.target);\n")
-          .append("      // Field Carpet & Subfloor\n")
-          .append("      const L = 16.541, W = 8.069;\n")
-          .append("      const carpet = new THREE.Mesh(new THREE.BoxGeometry(L, W, 0.02), new THREE.MeshStandardMaterial({color: 0x262b36, roughness: 0.85, metalness: 0.08}));\n")
-          .append("      carpet.position.set(L/2, W/2, -0.01); carpet.receiveShadow = true; scene.add(carpet);\n")
-          .append("      const lineMatW = new THREE.MeshBasicMaterial({color: 0xf8fafc});\n")
-          .append("      const lineMatB = new THREE.MeshBasicMaterial({color: 0x3b82f6});\n")
-          .append("      const lineMatR = new THREE.MeshBasicMaterial({color: 0xef4444});\n")
-          .append("      [[L/2, lineMatW],[4.626, lineMatB],[11.915, lineMatR],[1.90, lineMatW],[14.64, lineMatW]].forEach(p => {\n")
-          .append("        const ln = new THREE.Mesh(new THREE.BoxGeometry(0.05, W, 0.004), p[1]); ln.position.set(p[0], W/2, 0.002); scene.add(ln);\n")
-          .append("      });\n")
-          .append("      // Polycarbonate Perimeter Guardrails & Driver Station Walls\n")
-          .append("      const matSteel = new THREE.MeshStandardMaterial({color: 0x334155, metalness: 0.7, roughness: 0.35});\n")
-          .append("      const matAlum = new THREE.MeshStandardMaterial({color: 0xcbd5e1, metalness: 0.8, roughness: 0.25});\n")
-          .append("      const matGlass = new THREE.MeshPhysicalMaterial({color: 0xdbeafe, transparent: true, opacity: 0.26, roughness: 0.1, metalness: 0.1});\n")
-          .append("      [-0.03, W+0.03].forEach(wy => {\n")
-          .append("        const b = new THREE.Mesh(new THREE.BoxGeometry(L, 0.06, 0.12), matSteel); b.position.set(L/2, wy, 0.06); scene.add(b);\n")
-          .append("        const g = new THREE.Mesh(new THREE.BoxGeometry(L, 0.02, 0.36), matGlass); g.position.set(L/2, wy, 0.30); scene.add(g);\n")
-          .append("      });\n")
-          .append("      // Build 3D Octagonal Hubs (Blue & Red) + Trenches + Center Climb Tower\n")
-          .append("      function addHub3D(hx, hy, colHex) {\n")
-          .append("        const hg = new THREE.Group(); hg.position.set(hx, hy, 0);\n")
-          .append("        const matHub = new THREE.MeshStandardMaterial({color: colHex, metalness: 0.4, roughness: 0.4});\n")
-          .append("        const matGold = new THREE.MeshStandardMaterial({color: 0xfacc15, metalness: 0.65, roughness: 0.25});\n")
-          .append("        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.46, 1.05, 8), matHub);\n")
-          .append("        base.rotation.x = Math.PI/2; base.position.z = 0.525; base.castShadow = true; base.receiveShadow = true; hg.add(base);\n")
-          .append("        const funnel = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.46, 0.60, 8, 1, true), new THREE.MeshPhysicalMaterial({color: colHex, transparent: true, opacity: 0.48, side: THREE.DoubleSide, roughness: 0.2}));\n")
-          .append("        funnel.rotation.x = Math.PI/2; funnel.position.z = 1.35; hg.add(funnel);\n")
-          .append("        const rim = new THREE.Mesh(new THREE.TorusGeometry(0.58, 0.032, 12, 8), matGold);\n")
-          .append("        rim.position.z = 1.65; rim.castShadow = true; hg.add(rim);\n")
-          .append("        scene.add(hg);\n")
-          .append("      }\n")
-          .append("      addHub3D(4.626, 4.035, 0x2563eb); addHub3D(11.915, 4.035, 0xdc2626);\n")
-          .append("      // Build Articulated 3D CAD Robot Assembly\n")
-          .append("      robotGroup = new THREE.Group();\n")
-          .append("      const bumperMat = new THREE.MeshStandardMaterial({color: isBlue ? 0x1d4ed8 : 0xb91c1c, roughness: 0.45, metalness: 0.2});\n")
-          .append("      const bumpers = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.86, 0.13), bumperMat);\n")
-          .append("      bumpers.position.z = 0.09; bumpers.castShadow = true; robotGroup.add(bumpers);\n")
-          .append("      const frame = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.68, 0.10), matAlum);\n")
-          .append("      frame.position.z = 0.11; frame.castShadow = true; robotGroup.add(frame);\n")
-          .append("      const shooter = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.36, 0.26), new THREE.MeshStandardMaterial({color: 0xfbbf24, metalness: 0.7, roughness: 0.25}));\n")
-          .append("      shooter.position.set(0.14, 0, 0.29); shooter.castShadow = true; robotGroup.add(shooter);\n")
-          .append("      hoodMesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.34, 0.06), new THREE.MeshStandardMaterial({color: 0x9333ea, metalness: 0.5, roughness: 0.3}));\n")
-          .append("      hoodMesh.position.set(0.16, 0, 0.44); robotGroup.add(hoodMesh);\n")
-          .append("      tilterGroup = new THREE.Group(); tilterGroup.position.set(-0.32, 0, 0.18);\n")
-          .append("      const tilterArm = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.54, 0.06), new THREE.MeshStandardMaterial({color: 0xf97316, metalness: 0.5, roughness: 0.35}));\n")
-          .append("      tilterArm.position.set(-0.12, 0, 0); tilterGroup.add(tilterArm);\n")
-          .append("      const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.52, 16), new THREE.MeshStandardMaterial({color: 0x10b981}));\n")
-          .append("      roller.position.set(-0.24, 0, 0); tilterGroup.add(roller); robotGroup.add(tilterGroup);\n")
-          .append("      scene.add(robotGroup);\n")
-          .append("      // 36 PBR Fuel Spheres + 24 Glowing Trail Spheres\n")
-          .append("      const ballGeo = new THREE.SphereGeometry(0.0889, 20, 16);\n")
-          .append("      const ballMat = new THREE.MeshStandardMaterial({color: 0xfacc15, roughness: 0.32, metalness: 0.15});\n")
-          .append("      for(let i=0;i<36;i++){ const m = new THREE.Mesh(ballGeo, ballMat); m.castShadow = true; m.visible = false; scene.add(m); ballMeshes.push(m); }\n")
-          .append("      const trGeo = new THREE.SphereGeometry(0.032, 10, 10);\n")
-          .append("      const trMat = new THREE.MeshBasicMaterial({color: 0x38bdf8, transparent: true, opacity: 0.65});\n")
-          .append("      for(let i=0;i<24;i++){ const m = new THREE.Mesh(trGeo, trMat); m.visible = false; scene.add(m); trailMeshes.push(m); }\n")
-          .append("    } catch (e) { glRenderer = null; }\n")
+          .append("  let idx = 0, playing = false, lastTs = 0;\n")
+          .append("  let orbitYaw = -0.22, orbitPitch = 0.62, zoom = 1.0, dragging = false, dragX = 0, dragY = 0;\n")
+          .append("  function makeSpan(text, color, bold) {\n")
+          .append("    const s = document.createElement('span');\n")
+          .append("    s.textContent = text;\n")
+          .append("    if (color) s.style.color = color;\n")
+          .append("    if (bold) s.style.fontWeight = '700';\n")
+          .append("    return s;\n")
           .append("  }\n")
-          .append("  function draw(){\n")
-          .append("    const f = sim3dFrames[idx]; if(!f) return;\n")
-          .append("    const maxT = sim3dFrames[sim3dFrames.length-1][0];\n")
-          .append("    timeLbl.textContent = f[0].toFixed(1) + 's / ' + maxT.toFixed(1) + 's';\n")
+          .append("  function proj(fx, fy, fz, mode, rx, ry) {\n")
+          .append("    const cw = c.width, ch = c.height;\n")
+          .append("    if (mode === 'top') {\n")
+          .append("      const sc = Math.min((cw - 90) / L, (ch - 120) / W) * zoom;\n")
+          .append("      return [cw * 0.5 + (fx - L * 0.5) * sc, ch * 0.52 - (fy - W * 0.5) * sc];\n")
+          .append("    }\n")
+          .append("    if (mode === 'side') {\n")
+          .append("      const sc = ((cw - 90) / L) * zoom;\n")
+          .append("      return [cw * 0.5 + (fx - L * 0.5) * sc, ch * 0.78 - fz * sc * 1.45 - (fy - W * 0.5) * sc * 0.14];\n")
+          .append("    }\n")
+          .append("    const cx = mode === 'follow' ? rx : L * 0.5;\n")
+          .append("    const cy = mode === 'follow' ? ry : W * 0.5;\n")
+          .append("    const sc = (mode === 'follow' ? 78 : 54) * zoom;\n")
+          .append("    const dx = fx - cx, dy = fy - cy;\n")
+          .append("    const ux = dx * Math.cos(orbitYaw) - dy * Math.sin(orbitYaw);\n")
+          .append("    const uy = dx * Math.sin(orbitYaw) + dy * Math.cos(orbitYaw);\n")
+          .append("    return [cw * 0.5 + ux * sc, ch * 0.56 - (uy * Math.sin(orbitPitch) + fz * Math.cos(orbitPitch) * 1.25) * sc];\n")
+          .append("  }\n")
+          .append("  function drawPoly(pts, fill, stroke, lw) {\n")
+          .append("    ctx.beginPath();\n")
+          .append("    pts.forEach((p, i) => i === 0 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]));\n")
+          .append("    ctx.closePath();\n")
+          .append("    if (fill) { ctx.fillStyle = fill; ctx.fill(); }\n")
+          .append("    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 1.5; ctx.stroke(); }\n")
+          .append("  }\n")
+          .append("  function drawHub(hx, hy, fill, rim, mode, rx, ry) {\n")
+          .append("    const basePts = [], rimPts = [];\n")
+          .append("    for (let i = 0; i < 8; i++) {\n")
+          .append("      const a = i * Math.PI / 4;\n")
+          .append("      basePts.push(proj(hx + 0.46 * Math.cos(a), hy + 0.46 * Math.sin(a), 0, mode, rx, ry));\n")
+          .append("      rimPts.push(proj(hx + 0.58 * Math.cos(a), hy + 0.58 * Math.sin(a), 1.65, mode, rx, ry));\n")
+          .append("    }\n")
+          .append("    drawPoly(basePts, fill, rim, 1.2);\n")
+          .append("    ctx.strokeStyle = fill; ctx.lineWidth = 1.4;\n")
+          .append("    for (let i = 0; i < 8; i++) { ctx.beginPath(); ctx.moveTo(basePts[i][0], basePts[i][1]); ctx.lineTo(rimPts[i][0], rimPts[i][1]); ctx.stroke(); }\n")
+          .append("    drawPoly(rimPts, fill, rim, 2.2);\n")
+          .append("  }\n")
+          .append("  function draw() {\n")
+          .append("    const f = sim3dFrames[idx]; if (!f) return;\n")
+          .append("    const maxT = sim3dFrames[sim3dFrames.length - 1][0] || 0;\n")
+          .append("    const tVal = f[0] || 0;\n")
+          .append("    timeLbl.textContent = tVal.toFixed(1) + 's / ' + maxT.toFixed(1) + 's';\n")
           .append("    scrub.value = idx;\n")
-          .append("    if (hudTop) hudTop.innerHTML = '<span><strong style=\"color:#60A5FA\">BLUE HUB: '+f[10]+'</strong> &nbsp;•&nbsp; <span style=\"color:#F87171\">RED HUB: '+f[11]+'</span> &nbsp;•&nbsp; <span style=\"color:#FACC15\">INTAKED: '+f[12]+'</span></span><span>'+(f[13] ? '<span style=\"color:'+(f[13].indexOf('SCORED')>=0?'#4ADE80':'#FCA5A5')+'\">'+f[13]+'</span>' : 'T = '+f[0].toFixed(1)+'s')+'</span>';\n")
-          .append("    if (hudBot) hudBot.innerHTML = '<span style=\"color:'+(f[4]<6.8?'#F87171':'#4ADE80')+'\">BATTERY: '+f[4].toFixed(2)+' V'+(f[4]<6.8?' [BROWNOUT!]':'')+'</span><span>DRIVE STATOR: '+f[5]+' A &nbsp;•&nbsp; SHOOTER: '+f[6].toFixed(1)+' RPS &nbsp;•&nbsp; HOOD: '+f[7].toFixed(2)+' rot</span>';\n")
-          .append("    if (glRenderer && scene && camera) {\n")
-          .append("      const rx = f[1], ry = f[2], yaw = f[3];\n")
-          .append("      robotGroup.position.set(rx, ry, 0);\n")
-          .append("      robotGroup.rotation.z = yaw;\n")
-          .append("      if (tilterGroup) tilterGroup.rotation.y = f[6] > 20 ? -0.25 : 0.35;\n")
-          .append("      if (hoodMesh) hoodMesh.rotation.y = -f[7] * 0.04;\n")
-          .append("      const balls = f[14];\n")
-          .append("      for (let i=0; i<ballMeshes.length; i++) {\n")
-          .append("        if (i*3+2 < balls.length) { ballMeshes[i].position.set(balls[i*3], balls[i*3+1], balls[i*3+2]); ballMeshes[i].visible = true; } else { ballMeshes[i].visible = false; }\n")
-          .append("      }\n")
-          .append("      let tCnt = 0;\n")
-          .append("      for (let k=Math.max(0,idx-16); k<=idx && tCnt<trailMeshes.length; k++) {\n")
-          .append("        const b = sim3dFrames[k][14];\n")
-          .append("        for (let j=0; j+2<b.length && tCnt<trailMeshes.length; j+=3) {\n")
-          .append("          if (b[j+2] > 0.15) { trailMeshes[tCnt].position.set(b[j], b[j+1], b[j+2]); trailMeshes[tCnt].visible = true; tCnt++; }\n")
+          .append("    if (hudTop) {\n")
+          .append("      const left = document.createElement('span');\n")
+          .append("      left.append(makeSpan('BLUE HUB: ' + f[10], '#60A5FA', true), makeSpan('  •  ', '#94A3B8', false), makeSpan('RED HUB: ' + f[11], '#F87171', false), makeSpan('  •  ', '#94A3B8', false), makeSpan('INTAKED: ' + f[12], '#FACC15', false));\n")
+          .append("      const banner = f[13] || '';\n")
+          .append("      const right = banner ? makeSpan(banner, banner.indexOf('SCORED') >= 0 ? '#4ADE80' : '#FCA5A5', true) : makeSpan('T = ' + tVal.toFixed(1) + 's', '#E2E8F0', true);\n")
+          .append("      hudTop.replaceChildren(left, right);\n")
+          .append("    }\n")
+          .append("    if (hudBot) {\n")
+          .append("      const v = f[4];\n")
+          .append("      const vText = v === null ? 'BATTERY: N/A' : ('BATTERY: ' + v.toFixed(2) + ' V' + (v < 6.8 ? ' [BROWNOUT!]' : ''));\n")
+          .append("      const vCol = v === null ? '#94A3B8' : (v < 6.8 ? '#F87171' : '#4ADE80');\n")
+          .append("      const stats = 'DRIVE STATOR: ' + (f[5] || 0) + ' A  •  SHOOTER: ' + (f[6] || 0).toFixed(1) + ' RPS  •  HOOD: ' + (f[7] || 0).toFixed(2) + ' rot';\n")
+          .append("      hudBot.replaceChildren(makeSpan(vText, vCol, true), makeSpan(stats, '#CBD5E1', false));\n")
+          .append("    }\n")
+          .append("    const mode = camSel ? camSel.value : 'iso';\n")
+          .append("    const rx = f[1] || 0, ry = f[2] || 0, yaw = f[3] || 0;\n")
+          .append("    ctx.fillStyle = '#0b0f19'; ctx.fillRect(0, 0, c.width, c.height);\n")
+          .append("    drawPoly([proj(0,0,0,mode,rx,ry), proj(4.626,0,0,mode,rx,ry), proj(4.626,W,0,mode,rx,ry), proj(0,W,0,mode,rx,ry)], '#172554', '#1E3A8A', 1);\n")
+          .append("    drawPoly([proj(4.626,0,0,mode,rx,ry), proj(11.915,0,0,mode,rx,ry), proj(11.915,W,0,mode,rx,ry), proj(4.626,W,0,mode,rx,ry)], '#1E293B', '#334155', 1);\n")
+          .append("    drawPoly([proj(11.915,0,0,mode,rx,ry), proj(L,0,0,mode,rx,ry), proj(L,W,0,mode,rx,ry), proj(11.915,W,0,mode,rx,ry)], '#450A0A', '#7F1D1D', 1);\n")
+          .append("    ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1;\n")
+          .append("    for (let gx = 2; gx < L; gx += 2) { const a = proj(gx,0,0,mode,rx,ry), b = proj(gx,W,0,mode,rx,ry); ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); }\n")
+          .append("    for (let gy = 2; gy < W; gy += 2) { const a = proj(0,gy,0,mode,rx,ry), b = proj(L,gy,0,mode,rx,ry); ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); }\n")
+          .append("    const cA = proj(L*0.5,0,0,mode,rx,ry), cB = proj(L*0.5,W,0,mode,rx,ry);\n")
+          .append("    ctx.strokeStyle = 'rgba(248,250,252,0.45)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cA[0],cA[1]); ctx.lineTo(cB[0],cB[1]); ctx.stroke();\n")
+          .append("    drawHub(4.626, 4.035, 'rgba(37,99,235,0.45)', '#60A5FA', mode, rx, ry);\n")
+          .append("    drawHub(11.915, 4.035, 'rgba(220,38,38,0.45)', '#F87171', mode, rx, ry);\n")
+          .append("    ctx.strokeStyle = 'rgba(56,189,248,0.55)'; ctx.lineWidth = 2;\n")
+          .append("    ctx.beginPath();\n")
+          .append("    for (let k = Math.max(0, idx - 60); k <= idx; k++) {\n")
+          .append("      const p = proj(sim3dFrames[k][1] || 0, sim3dFrames[k][2] || 0, 0.04, mode, rx, ry);\n")
+          .append("      if (k === Math.max(0, idx - 60)) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);\n")
+          .append("    }\n")
+          .append("    ctx.stroke();\n")
+          .append("    const half = 0.43, cos = Math.cos(yaw), sin = Math.sin(yaw);\n")
+          .append("    const corners = [[-half,-half],[half,-half],[half,half],[-half,half]].map(pt => proj(rx + pt[0]*cos - pt[1]*sin, ry + pt[0]*sin + pt[1]*cos, 0.16, mode, rx, ry));\n")
+          .append("    drawPoly(corners, isBlue ? '#1D4ED8' : '#B91C1C', '#F8FAFC', 2.2);\n")
+          .append("    const rc = proj(rx, ry, 0.22, mode, rx, ry), rh = proj(rx + 0.60*cos, ry + 0.60*sin, 0.22, mode, rx, ry);\n")
+          .append("    ctx.strokeStyle = '#FACC15'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(rc[0], rc[1]); ctx.lineTo(rh[0], rh[1]); ctx.stroke();\n")
+          .append("    if ((f[8] || 0) > 0.05) {\n")
+          .append("      const ez = 0.22 + f[8], ep = proj(rx, ry, ez, mode, rx, ry);\n")
+          .append("      ctx.strokeStyle = '#38BDF8'; ctx.lineWidth = 3.5; ctx.beginPath(); ctx.moveTo(rc[0], rc[1]); ctx.lineTo(ep[0], ep[1]); ctx.stroke();\n")
+          .append("      const ap = proj(rx + 0.5*Math.cos(f[9]||0)*cos, ry + 0.5*Math.cos(f[9]||0)*sin, ez + 0.5*Math.sin(f[9]||0), mode, rx, ry);\n")
+          .append("      ctx.strokeStyle = '#FACC15'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(ep[0], ep[1]); ctx.lineTo(ap[0], ap[1]); ctx.stroke();\n")
+          .append("    }\n")
+          .append("    for (let k = Math.max(0, idx - 14); k <= idx; k++) {\n")
+          .append("      const tb = sim3dFrames[k][14] || [];\n")
+          .append("      for (let j = 0; j + 2 < tb.length; j += 3) {\n")
+          .append("        if (tb[j+2] > 0.16) {\n")
+          .append("          const tp = proj(tb[j], tb[j+1], tb[j+2], mode, rx, ry);\n")
+          .append("          ctx.fillStyle = 'rgba(56,189,248,0.45)'; ctx.beginPath(); ctx.arc(tp[0], tp[1], 3, 0, Math.PI*2); ctx.fill();\n")
           .append("        }\n")
           .append("      }\n")
-          .append("      for (let k=tCnt; k<trailMeshes.length; k++) trailMeshes[k].visible = false;\n")
-          .append("      const hubX = isBlue ? 4.626 : 11.915, hubY = 4.035;\n")
-          .append("      const tx = camSel.value==='follow' ? rx : (0.55*rx + 0.45*hubX);\n")
-          .append("      const ty = camSel.value==='follow' ? ry : (0.55*ry + 0.45*hubY);\n")
-          .append("      const tz = 0.62;\n")
-          .append("      camera.position.set(tx + camDist*Math.cos(camPitch)*Math.cos(camYaw), ty + camDist*Math.cos(camPitch)*Math.sin(camYaw), tz + camDist*Math.sin(camPitch));\n")
-          .append("      camera.lookAt(tx, ty, tz);\n")
-          .append("      glRenderer.render(scene, camera);\n")
+          .append("    }\n")
+          .append("    const balls = f[14] || [];\n")
+          .append("    for (let i = 0; i + 2 < balls.length; i += 3) {\n")
+          .append("      const sh = proj(balls[i], balls[i+1], 0, mode, rx, ry);\n")
+          .append("      ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.beginPath(); ctx.ellipse(sh[0], sh[1], 4.5, 2.5, 0, 0, Math.PI*2); ctx.fill();\n")
+          .append("      const bp = proj(balls[i], balls[i+1], balls[i+2], mode, rx, ry);\n")
+          .append("      ctx.fillStyle = balls[i+2] > 0.16 ? '#FACC15' : '#EAB308'; ctx.beginPath(); ctx.arc(bp[0], bp[1], balls[i+2] > 0.16 ? 5.5 : 4.2, 0, Math.PI*2); ctx.fill();\n")
           .append("    }\n")
           .append("  }\n")
-          .append("  function loop(ts){\n")
-          .append("    if(!playing) return;\n")
-          .append("    const spd = parseFloat(speedSel.value||'1');\n")
-          .append("    if(ts - lastTs >= (75 / spd)){\n")
-          .append("      lastTs = ts; idx++; if(idx >= sim3dFrames.length){ idx = 0; playing = false; playBtn.textContent = '▶ Play'; }\n")
+          .append("  c.addEventListener('mousedown', e => { dragging = true; dragX = e.clientX; dragY = e.clientY; c.style.cursor = 'grabbing'; });\n")
+          .append("  window.addEventListener('mouseup', () => { dragging = false; c.style.cursor = 'grab'; });\n")
+          .append("  window.addEventListener('mousemove', e => { if (!dragging) return; orbitYaw += (e.clientX - dragX) * 0.008; orbitPitch = Math.max(0.2, Math.min(1.45, orbitPitch + (e.clientY - dragY) * 0.006)); dragX = e.clientX; dragY = e.clientY; draw(); });\n")
+          .append("  c.addEventListener('wheel', e => { e.preventDefault(); zoom = Math.max(0.55, Math.min(2.4, zoom * (e.deltaY > 0 ? 0.92 : 1.08))); draw(); }, { passive: false });\n")
+          .append("  if (camSel) camSel.addEventListener('change', draw);\n")
+          .append("  function loop(ts) {\n")
+          .append("    if (!playing) return;\n")
+          .append("    const spd = parseFloat(speedSel.value || '1');\n")
+          .append("    if (ts - lastTs >= (75 / spd)) {\n")
+          .append("      lastTs = ts; idx++; if (idx >= sim3dFrames.length) { idx = 0; playing = false; playBtn.textContent = 'Play'; }\n")
           .append("      draw();\n")
           .append("    }\n")
-          .append("    if(playing) requestAnimationFrame(loop);\n")
+          .append("    if (playing) requestAnimationFrame(loop);\n")
           .append("  }\n")
-          .append("  playBtn.addEventListener('click', () => { playing = !playing; playBtn.textContent = playing ? '⏸ Pause' : '▶ Play'; if(playing){ lastTs = performance.now(); requestAnimationFrame(loop); } });\n")
-          .append("  scrub.addEventListener('input', () => { idx = parseInt(scrub.value,10)||0; draw(); });\n")
-          .append("  window.seekSim3D = function(sec){\n")
-          .append("    let best = 0; for(let i=0;i<sim3dFrames.length;i++){ if(sim3dFrames[i][0]<=sec) best=i; else break; }\n")
+          .append("  playBtn.addEventListener('click', () => { playing = !playing; playBtn.textContent = playing ? 'Pause' : 'Play'; if (playing) { lastTs = performance.now(); requestAnimationFrame(loop); } });\n")
+          .append("  scrub.addEventListener('input', () => { idx = parseInt(scrub.value, 10) || 0; draw(); });\n")
+          .append("  window.seekSim3D = function(sec) {\n")
+          .append("    let best = 0; for (let i = 0; i < sim3dFrames.length; i++) { if ((sim3dFrames[i][0] || 0) <= sec) best = i; else break; }\n")
           .append("    idx = best; draw(); document.getElementById('sim3dCard').scrollIntoView({behavior:'smooth'});\n")
-          .append("    if(!playing){ playing = true; playBtn.textContent = '⏸ Pause'; lastTs = performance.now(); requestAnimationFrame(loop); }\n")
+          .append("    if (!playing) { playing = true; playBtn.textContent = 'Pause'; lastTs = performance.now(); requestAnimationFrame(loop); }\n")
           .append("  };\n")
-          .append("  if(recBtn && c.captureStream && window.MediaRecorder){\n")
+          .append("  if (recBtn && c.captureStream && window.MediaRecorder) {\n")
           .append("    let rec = null, chunks = [];\n")
           .append("    recBtn.addEventListener('click', () => {\n")
-          .append("      if(rec && rec.state === 'recording'){ rec.stop(); return; }\n")
+          .append("      if (rec && rec.state === 'recording') { rec.stop(); return; }\n")
           .append("      chunks = []; const stream = c.captureStream(30);\n")
           .append("      rec = new MediaRecorder(stream, {mimeType: MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm'});\n")
-          .append("      rec.ondataavailable = e => { if(e.data && e.data.size > 0) chunks.push(e.data); };\n")
-          .append("      rec.onstop = () => { const blob = new Blob(chunks, {type:'video/webm'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flux-3d-replay.webm'; a.click(); recBtn.textContent = '🎬 Record Clip (.webm)'; };\n")
-          .append("      rec.start(); recBtn.textContent = '⏹ Stop & Save (.webm)';\n")
-          .append("      if(!playing) playBtn.click();\n")
+          .append("      rec.ondataavailable = e => { if (e.data && e.data.size > 0) chunks.push(e.data); };\n")
+          .append("      rec.onstop = () => { const blob = new Blob(chunks, {type:'video/webm'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flux-replay.webm'; a.click(); recBtn.textContent = 'Record Clip (.webm)'; };\n")
+          .append("      rec.start(); recBtn.textContent = 'Stop & Save (.webm)';\n")
+          .append("      if (!playing) playBtn.click();\n")
           .append("    });\n")
           .append("  }\n")
           .append("  draw();\n")
@@ -1009,16 +1125,14 @@ public final class HtmlReportGenerator {
     html.append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n")
         .append("  <meta charset=\"UTF-8\">\n")
         .append("  <title>FLUX 10413 — Season Log &amp; Battery Leaderboard</title>\n")
-        .append(
-            "  <link href=\"https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap\" rel=\"stylesheet\">\n")
         .append("  <style>\n")
         .append(
-            "    body { font-family: 'Space Grotesk', system-ui, sans-serif; background: #F2F3F5; color: #212020; padding: 24px; }\n")
+            "    body { font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif; background: #F2F3F5; color: #212020; padding: 24px; }\n")
         .append(
             "    .container { max-width: 1240px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }\n")
         .append(
             "    .header { background: #FFF; border-top: 6px solid #254BA0; border-radius: 10px; padding: 18px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 6px rgba(0,0,0,0.06); }\n")
-        .append("    .logo { height: 50px; }\n")
+        .append("    .logo { height: 50px; width: auto; flex-shrink: 0; }\n")
         .append(
             "    .card { background: #FFF; border-radius: 10px; padding: 18px 22px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }\n")
         .append(
@@ -1036,9 +1150,7 @@ public final class HtmlReportGenerator {
         .append("  </style>\n</head>\n<body>\n<div class=\"container\">\n")
         .append("  <div class=\"header\">\n")
         .append("    <div style=\"display:flex;align-items:center;gap:16px;\">\n")
-        .append("      <img class=\"logo\" src=\"")
-        .append(LOGO_URL)
-        .append("\" alt=\"FLUX Robotics\">\n")
+        .append("      ").append(FLUX_LOGO_SVG).append("\n")
         .append(
             "      <div><h1 style=\"font-size:21px;\">FRC Team 10413 (FLUX Robotics) — FluxProcessor Index</h1>\n")
         .append(
@@ -1059,6 +1171,9 @@ public final class HtmlReportGenerator {
           "CRITICAL".equals(r.overallVerdict())
               ? "pill-fail"
               : ("WARN".equals(r.overallVerdict()) ? "pill-warn" : "pill-pass");
+      String safeRunDir = sanitizeRelativePath(r.runId());
+      String safeVideoFile =
+          r.fuelSim() != null ? sanitizeRelativePath(r.fuelSim().videoFileName()) : "";
       html.append("        <tr>\n")
           .append("          <td><strong>")
           .append(esc(r.runId()))
@@ -1092,16 +1207,18 @@ public final class HtmlReportGenerator {
           .append("\">")
           .append(esc(r.overallVerdict()))
           .append("</span></td>\n")
-          .append("          <td style=\"display:flex;gap:6px;\"><a class=\"btn\" href=\"")
-          .append(esc(r.runId()))
-          .append("/report.html\">Open Report</a>")
+          .append("          <td style=\"display:flex;gap:6px;\">")
           .append(
-              r.fuelSim() != null && r.fuelSim().videoFileName() != null
+              !safeRunDir.isEmpty()
+                  ? "<a class=\"btn\" href=\"" + esc(safeRunDir) + "/report.html\">Open Report</a>"
+                  : "—")
+          .append(
+              !safeRunDir.isEmpty() && !safeVideoFile.isEmpty()
                   ? "<a class=\"btn\" style=\"background:#16A34A\" href=\""
-                      + esc(r.runId())
+                      + esc(safeRunDir)
                       + "/"
-                      + esc(r.fuelSim().videoFileName())
-                      + "\">🎬 3D Video</a>"
+                      + esc(safeVideoFile)
+                      + "\">Replay Video</a>"
                   : "")
           .append("</td>\n")
           .append("        </tr>\n");
@@ -1110,8 +1227,41 @@ public final class HtmlReportGenerator {
     Files.writeString(outDir.resolve("runs-index.html"), html.toString(), StandardCharsets.UTF_8);
   }
 
+  /**
+   * Sanitizes external URLs for HTML {@code href} attributes, permitting only {@code http://} and
+   * {@code https://} schemes and rejecting {@code javascript:}, {@code data:}, and injection chars.
+   */
+  public static String sanitizeExternalUrl(String rawUrl) {
+    return RunAnalyzer.isSafeHttpUrl(rawUrl) ? rawUrl.trim() : "";
+  }
+
+  /** Sanitizes local relative paths for {@code href}/{@code src} attributes. */
+  public static String sanitizeRelativePath(String rawPath) {
+    if (rawPath == null) {
+      return "";
+    }
+    String clean = rawPath.trim().replace('\\', '/');
+    if (clean.isEmpty()
+        || clean.startsWith("/")
+        || clean.contains("..")
+        || clean.contains(":")) {
+      return "";
+    }
+    for (int i = 0; i < clean.length(); i++) {
+      char ch = clean.charAt(i);
+      if (ch <= 0x1F || ch == '"' || ch == '\'' || ch == '<' || ch == '>') {
+        return "";
+      }
+    }
+    return clean;
+  }
+
   private static String fmtFinite(double val, String format, String fallback) {
     return Double.isFinite(val) ? String.format(Locale.US, format, val) : fallback;
+  }
+
+  private static String jsNum(double val, String format) {
+    return Double.isFinite(val) ? String.format(Locale.US, format, val) : "null";
   }
 
   private static String kpiCard(String label, String val, String sub) {
@@ -1131,7 +1281,8 @@ public final class HtmlReportGenerator {
     return s.replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
-        .replace("\"", "&quot;");
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;");
   }
 
   private static String escJs(String s) {
@@ -1140,7 +1291,12 @@ public final class HtmlReportGenerator {
     }
     return s.replace("\\", "\\\\")
         .replace("\"", "\\\"")
+        .replace("'", "\\'")
         .replace("</", "<\\/")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
         .replace("\n", " ")
         .replace("\r", "");
   }

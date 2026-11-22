@@ -280,26 +280,28 @@ public final class FluxMcpServer {
     double tMin = Math.max(0.0, centerSec - windowSec);
     double tMax = centerSec + windowSec;
 
-    double minV = 14.0;
+    double minV = Double.POSITIVE_INFINITY;
     double peakDriveStator = 0.0;
     double peakSpeed = 0.0;
     for (TimelinePoint pt : rep.timeline()) {
       if (pt.timeSec() >= tMin && pt.timeSec() <= tMax) {
-        minV = Math.min(minV, pt.batteryVoltage());
+        if (Double.isFinite(pt.batteryVoltage())) {
+          minV = Math.min(minV, pt.batteryVoltage());
+        }
         peakDriveStator = Math.max(peakDriveStator, pt.totalDriveStatorAmps());
         peakSpeed = Math.max(peakSpeed, pt.chassisSpeedMps());
       }
     }
-    if (minV == 14.0) {
+    if (!Double.isFinite(minV)) {
       minV = rep.battery().minVoltage();
     }
     return String.format(
         Locale.US,
-        "{\"runId\":\"%s\",\"windowStartSec\":%.2f,\"windowEndSec\":%.2f,\"minBatteryVoltage\":%.2f,\"peakDriveStatorAmps\":%.1f,\"peakChassisSpeedMps\":%.2f,\"verdict\":\"%s\"}",
+        "{\"runId\":\"%s\",\"windowStartSec\":%.2f,\"windowEndSec\":%.2f,\"minBatteryVoltage\":%s,\"peakDriveStatorAmps\":%.1f,\"peakChassisSpeedMps\":%.2f,\"verdict\":\"%s\"}",
         escJson(runId),
         tMin,
         tMax,
-        minV,
+        jsonNum(minV, "%.2f"),
         peakDriveStator,
         peakSpeed,
         escJson(rep.overallVerdict()));
@@ -314,30 +316,39 @@ public final class FluxMcpServer {
             argsJson, "runB", ids.size() > 1 ? ids.get(1) : runA);
     RunAnalysisReport repA = getReportForRun(resolveRunId(runA));
     RunAnalysisReport repB = getReportForRun(resolveRunId(runB));
+    double deltaMinV =
+        Double.isFinite(repA.battery().minVoltage()) && Double.isFinite(repB.battery().minVoltage())
+            ? repB.battery().minVoltage() - repA.battery().minVoltage()
+            : Double.NaN;
+    double deltaRint =
+        Double.isFinite(repA.battery().estimatedRintMilliOhms())
+                && Double.isFinite(repB.battery().estimatedRintMilliOhms())
+            ? repB.battery().estimatedRintMilliOhms() - repA.battery().estimatedRintMilliOhms()
+            : Double.NaN;
 
     return String.format(
         Locale.US,
-        "{\"runA\":{\"id\":\"%s\",\"battery\":\"%s\",\"rIntMilliOhms\":%.1f,\"minVoltage\":%.2f,\"peakStatorAmps\":%.0f,\"shots\":%d,\"elevatorCycles\":%d,\"verdict\":\"%s\"},"
-            + "\"runB\":{\"id\":\"%s\",\"battery\":\"%s\",\"rIntMilliOhms\":%.1f,\"minVoltage\":%.2f,\"peakStatorAmps\":%.0f,\"shots\":%d,\"elevatorCycles\":%d,\"verdict\":\"%s\"},"
-            + "\"deltaMinVoltage\":%.2f,\"deltaRintMilliOhms\":%.1f}",
+        "{\"runA\":{\"id\":\"%s\",\"battery\":\"%s\",\"rIntMilliOhms\":%s,\"minVoltage\":%s,\"peakStatorAmps\":%.0f,\"shots\":%d,\"elevatorCycles\":%d,\"verdict\":\"%s\"},"
+            + "\"runB\":{\"id\":\"%s\",\"battery\":\"%s\",\"rIntMilliOhms\":%s,\"minVoltage\":%s,\"peakStatorAmps\":%.0f,\"shots\":%d,\"elevatorCycles\":%d,\"verdict\":\"%s\"},"
+            + "\"deltaMinVoltage\":%s,\"deltaRintMilliOhms\":%s}",
         escJson(repA.runId()),
         escJson(repA.battery().batteryName()),
-        repA.battery().estimatedRintMilliOhms(),
-        repA.battery().minVoltage(),
+        jsonNum(repA.battery().estimatedRintMilliOhms(), "%.1f"),
+        jsonNum(repA.battery().minVoltage(), "%.2f"),
         repA.battery().peakDriveStatorAmps(),
         repA.shots().size(),
         repA.elevatorCycles().size(),
         escJson(repA.overallVerdict()),
         escJson(repB.runId()),
         escJson(repB.battery().batteryName()),
-        repB.battery().estimatedRintMilliOhms(),
-        repB.battery().minVoltage(),
+        jsonNum(repB.battery().estimatedRintMilliOhms(), "%.1f"),
+        jsonNum(repB.battery().minVoltage(), "%.2f"),
         repB.battery().peakDriveStatorAmps(),
         repB.shots().size(),
         repB.elevatorCycles().size(),
         escJson(repB.overallVerdict()),
-        repB.battery().minVoltage() - repA.battery().minVoltage(),
-        repB.battery().estimatedRintMilliOhms() - repA.battery().estimatedRintMilliOhms());
+        jsonNum(deltaMinV, "%.2f"),
+        jsonNum(deltaRint, "%.1f"));
   }
 
   private String toolMoiRegression(String argsJson) throws Exception {
@@ -349,14 +360,18 @@ public final class FluxMcpServer {
             List.of(rep), List.of(runDir), null, runDir, rep.robotName());
     return String.format(
         Locale.US,
-        "{\"runId\":\"%s\",\"profile\":\"%s\",\"batteryRintMilliOhms\":%.1f,\"batteryRSquared\":%.3f,\"wheelRadiusMeters\":%.5f,\"swerveCouplingRatio\":%.4f,\"calibratedMechanisms\":%d}",
+        "{\"runId\":\"%s\",\"profile\":\"%s\",\"batteryRintMilliOhms\":%s,\"batteryRSquared\":%s,\"wheelRadiusMeters\":%.5f,\"swerveCouplingRatio\":%.4f,\"calibratedMechanisms\":%d}",
         escJson(runId),
         escJson(summary.targetProfile()),
-        rep.battery().estimatedRintMilliOhms(),
-        rep.battery().rSquared(),
+        jsonNum(rep.battery().estimatedRintMilliOhms(), "%.1f"),
+        jsonNum(rep.battery().rSquared(), "%.3f"),
         summary.calibratedWheelRadiusMeters(),
         summary.calibratedCouplingRatio(),
         summary.calibratedMechanisms().size());
+  }
+
+  private static String jsonNum(double val, String fmt) {
+    return Double.isFinite(val) ? String.format(Locale.US, fmt, val) : "null";
   }
 
   private String toolSearchVoiceNotes(String argsJson) throws Exception {

@@ -330,15 +330,17 @@ public final class FuelSimVideoRenderer {
     g.setColor(new Color(15, 23, 42, 235));
     g.fillRect(0, HEIGHT - 54, WIDTH, 54);
 
-    boolean brownout = f.batteryVoltage() < 6.8;
+    boolean hasVolt = Double.isFinite(f.batteryVoltage());
+    boolean brownout = hasVolt && f.batteryVoltage() < 6.8;
     g.setFont(new Font("SansSerif", Font.BOLD, 13));
-    g.setColor(brownout ? new Color(239, 68, 68) : new Color(34, 197, 94));
+    g.setColor(brownout ? new Color(239, 68, 68) : (hasVolt ? new Color(34, 197, 94) : new Color(148, 163, 184)));
+    String voltLabel = hasVolt ? String.format(Locale.US, "%5.2f V", f.batteryVoltage()) : "  N/A";
     g.drawString(
         String.format(
             Locale.US,
-            "BATT (%s): %5.2f V %s",
+            "BATT (%s): %s %s",
             batteryName != null ? batteryName : "Batt",
-            f.batteryVoltage(),
+            voltLabel,
             brownout ? "[BROWNOUT!]" : ""),
         16,
         HEIGHT - 30);
@@ -547,7 +549,7 @@ public final class FuelSimVideoRenderer {
       sb.append(
           String.format(
               Locale.US,
-              "    {\"t\":%.2f,\"rx\":%.3f,\"ry\":%.3f,\"yaw\":%.3f,\"vBatt\":%.2f,"
+              "    {\"t\":%.2f,\"rx\":%.3f,\"ry\":%.3f,\"yaw\":%.3f,\"vBatt\":%s,"
                   + "\"dStator\":%.1f,\"shooterRps\":%.1f,\"hoodRot\":%.2f,\"elevM\":%.3f,"
                   + "\"armRad\":%.3f,\"blueScore\":%d,\"redScore\":%d,\"intaked\":%d,"
                   + "\"banner\":\"%s\",\"balls\":[",
@@ -555,7 +557,9 @@ public final class FuelSimVideoRenderer {
               f.robotX(),
               f.robotY(),
               f.robotHeadingRad(),
-              f.batteryVoltage(),
+              Double.isFinite(f.batteryVoltage())
+                  ? String.format(Locale.US, "%.2f", f.batteryVoltage())
+                  : "null",
               f.driveStatorAmps(),
               f.shooterRps(),
               f.hoodRot(),

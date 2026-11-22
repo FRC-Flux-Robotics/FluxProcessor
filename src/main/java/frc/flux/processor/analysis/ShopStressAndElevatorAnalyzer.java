@@ -274,6 +274,9 @@ public final class ShopStressAndElevatorAnalyzer {
                 allLogs,
                 mechLog,
                 List.of(
+                    "/Elevator/PositionRotations",
+                    "Elevator/PositionRotations",
+                    "/AdvantageKit/Elevator/PositionRotations",
                     "Mechanisms/Elevator/PositionRot",
                     "/Mechanisms/Elevator/PositionRot",
                     "/AdvantageKit/RealOutputs/Mechanisms/Elevator/PositionRot",
@@ -286,6 +289,11 @@ public final class ShopStressAndElevatorAnalyzer {
                 allLogs,
                 mechLog,
                 List.of(
+                    "/Elevator/StatorCurrentAmps",
+                    "Elevator/StatorCurrentAmps",
+                    "/AdvantageKit/Elevator/StatorCurrentAmps",
+                    "/Elevator/StatorCurrentA",
+                    "/Elevator/LeaderStatorCurrentA",
                     "Mechanisms/Elevator/LeaderStatorAmps",
                     "/Mechanisms/Elevator/LeaderStatorAmps",
                     "/AdvantageKit/RealOutputs/Mechanisms/Elevator/LeaderStatorAmps",
@@ -298,6 +306,9 @@ public final class ShopStressAndElevatorAnalyzer {
                 allLogs,
                 mechLog,
                 List.of(
+                    "/Arm/PositionRotations",
+                    "Arm/PositionRotations",
+                    "/AdvantageKit/Arm/PositionRotations",
                     "Mechanisms/Arm/PositionRot",
                     "/Mechanisms/Arm/PositionRot",
                     "/AdvantageKit/RealOutputs/Mechanisms/Arm/PositionRot",
@@ -337,7 +348,7 @@ public final class ShopStressAndElevatorAnalyzer {
     double peakElevRot = 0.0;
     double peakArmRot = 0.0;
     double peakStator = 0.0;
-    double minBattV = 14.0;
+    double minBattV = Double.POSITIVE_INFINITY;
     boolean keepOutTriggered = false;
 
     for (TimelinePoint pt : timeline) {
@@ -369,7 +380,10 @@ public final class ShopStressAndElevatorAnalyzer {
           peakElevRot = eRot;
           peakArmRot = aRot;
           peakStator = eAmps;
-          minBattV = pt.batteryVoltage();
+          minBattV =
+              Double.isFinite(pt.batteryVoltage())
+                  ? pt.batteryVoltage()
+                  : Double.POSITIVE_INFINITY;
           keepOutTriggered = keepOut;
         } else {
           if (eRot > peakElevRot) {
@@ -380,14 +394,19 @@ public final class ShopStressAndElevatorAnalyzer {
             peakArmRot = aRot;
           }
           peakStator = Math.max(peakStator, eAmps);
-          minBattV = Math.min(minBattV, pt.batteryVoltage());
+          if (Double.isFinite(pt.batteryVoltage())) {
+            minBattV = Math.min(minBattV, pt.batteryVoltage());
+          }
           keepOutTriggered = keepOutTriggered || keepOut;
         }
       } else if (inCycle) {
         double dur = Math.max(0.2, pt.timeSec() - startSec);
         int num = cycles.size() + 1;
+        double reportedBattV = Double.isFinite(minBattV) ? minBattV : Double.NaN;
         String status =
-            (minBattV < 7.5 || peakStator > 65.0) ? "HIGH LOAD / SAG" : "NOMINAL";
+            ((Double.isFinite(reportedBattV) && reportedBattV < 7.5) || peakStator > 65.0)
+                ? "HIGH LOAD / SAG"
+                : "NOMINAL";
         cycles.add(
             new ElevatorCycleEvent(
                 num,
@@ -397,7 +416,7 @@ public final class ShopStressAndElevatorAnalyzer {
                 peakElevRot,
                 peakArmRot,
                 peakStator,
-                minBattV,
+                reportedBattV,
                 keepOutTriggered,
                 status));
         inCycle = false;
@@ -408,7 +427,11 @@ public final class ShopStressAndElevatorAnalyzer {
       double endSec = timeline.get(timeline.size() - 1).timeSec();
       double dur = Math.max(0.2, endSec - startSec);
       int num = cycles.size() + 1;
-      String status = (minBattV < 7.5 || peakStator > 65.0) ? "HIGH LOAD / SAG" : "NOMINAL";
+      double reportedBattV = Double.isFinite(minBattV) ? minBattV : Double.NaN;
+      String status =
+          ((Double.isFinite(reportedBattV) && reportedBattV < 7.5) || peakStator > 65.0)
+              ? "HIGH LOAD / SAG"
+              : "NOMINAL";
       cycles.add(
           new ElevatorCycleEvent(
               num,
@@ -418,7 +441,7 @@ public final class ShopStressAndElevatorAnalyzer {
               peakElevRot,
               peakArmRot,
               peakStator,
-              minBattV,
+              reportedBattV,
               keepOutTriggered,
               status));
     }

@@ -40,6 +40,10 @@ public final class SystemHealthWatchAnalyzer {
 
     List<Double> totalLoopSamples =
         samplesFromTopicSuffix(allLogs, "Performance/TotalLoopMs", t0Us, windowEndUs);
+    if (totalLoopSamples.isEmpty()) {
+      totalLoopSamples =
+          samplesFromTopicSuffix(allLogs, "LoggedRobot/FullCycleMS", t0Us, windowEndUs);
+    }
     double wpiLoopMedianMs = percentile(totalLoopSamples, 0.50);
     double wpiLoopP99Ms = percentile(totalLoopSamples, 0.99);
     double wpiTotalLoopMaxMs = maxOf(totalLoopSamples);
@@ -60,7 +64,10 @@ public final class SystemHealthWatchAnalyzer {
     double wpiVisionMaxMs = maxFromTopicSuffix(allLogs, "Performance/VisionMs", t0Us, windowEndUs);
     double wpiSuperMaxMs =
         maxFromTopicSuffix(allLogs, "Performance/SuperstructureMs", t0Us, windowEndUs);
-    double wpiCpuTempC = maxFromTopicSuffix(allLogs, "CPUTemp", t0Us, windowEndUs);
+    double wpiCpuTempC =
+        Math.max(
+            maxFromTopicSuffix(allLogs, "CPUTempCelsius", t0Us, windowEndUs),
+            maxFromTopicSuffix(allLogs, "CPUTemp", t0Us, windowEndUs));
 
     boolean hasSnapshot = rawText != null && !rawText.isBlank();
     boolean hasWpiTiming =
@@ -292,8 +299,9 @@ public final class SystemHealthWatchAnalyzer {
     if (Files.isRegularFile(exact)) {
       return exact;
     }
-    try (Stream<Path> s = Files.list(runDir)) {
-      return s.filter(
+    try (Stream<Path> s = Files.walk(runDir, 3)) {
+      return s.filter(Files::isRegularFile)
+          .filter(
               p -> {
                 String n = p.getFileName().toString().toLowerCase(Locale.ROOT);
                 return n.startsWith("system-snapshot") && n.endsWith(".txt");

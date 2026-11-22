@@ -805,6 +805,9 @@ public final class FuelSimEngine {
             allLogs,
             driveLog,
             List.of(
+                "/RealOutputs/Drive/Pose.x",
+                "RealOutputs/Drive/Pose.x",
+                "/AdvantageKit/RealOutputs/Drive/Pose.x",
                 "/RealOutputs/Odometry/Robot.x",
                 "RealOutputs/Odometry/Robot.x",
                 "/AdvantageKit/RealOutputs/Odometry/Robot.x",
@@ -814,6 +817,9 @@ public final class FuelSimEngine {
             allLogs,
             driveLog,
             List.of(
+                "/RealOutputs/Drive/Pose.y",
+                "RealOutputs/Drive/Pose.y",
+                "/AdvantageKit/RealOutputs/Drive/Pose.y",
                 "/RealOutputs/Odometry/Robot.y",
                 "RealOutputs/Odometry/Robot.y",
                 "/AdvantageKit/RealOutputs/Odometry/Robot.y",
@@ -823,33 +829,98 @@ public final class FuelSimEngine {
             allLogs,
             driveLog,
             List.of(
+                "/RealOutputs/Drive/Pose.rotRad",
+                "RealOutputs/Drive/Pose.rotRad",
+                "/AdvantageKit/RealOutputs/Drive/Pose.rotRad",
                 "/RealOutputs/Odometry/Robot.rotRad",
                 "RealOutputs/Odometry/Robot.rotRad",
                 "/AdvantageKit/RealOutputs/Odometry/Robot.rotRad",
                 "/Odometry/Robot.rotRad"));
 
     int pigeonId = profile.pigeonId() > 0 ? profile.pigeonId() : 20;
-    List<DoubleSample> yawSeries =
+    List<DoubleSample> yawRadSeries =
         RunAnalyzer.findDoubleSeries(
-            allLogs, driveLog, List.of("Phoenix6/Pigeon2-" + pigeonId + "/Yaw", "/Drive/GyroYawDeg"));
+            allLogs,
+            driveLog,
+            List.of(
+                "/Drive/Gyro/YawPositionRad",
+                "Drive/Gyro/YawPositionRad",
+                "/AdvantageKit/Drive/Gyro/YawPositionRad"));
+    List<DoubleSample> yawDegSeries =
+        RunAnalyzer.findDoubleSeries(
+            allLogs,
+            driveLog,
+            List.of(
+                "Phoenix6/Pigeon2-" + pigeonId + "/Yaw",
+                "/Phoenix6/Pigeon2-" + pigeonId + "/Yaw",
+                "/Drive/GyroYawDeg",
+                "Drive/GyroYawDeg"));
+    boolean yawIsRadians = !yawRadSeries.isEmpty();
+    List<DoubleSample> yawSeries = yawIsRadians ? yawRadSeries : yawDegSeries;
 
+    boolean wheelScalePhoenix6 = RunAnalyzer.isPhoenix6DriveWheelScale(profile, allLogs);
     List<List<DoubleSample>> drivePosSeries = new ArrayList<>();
+    List<Integer> drivePosUnits = new ArrayList<>(); // 0 = rotor rot, 1 = wheel rot, 2 = wheel rad
     List<List<DoubleSample>> steerPosSeries = new ArrayList<>();
+    List<Boolean> steerPosIsRadians = new ArrayList<>();
+    int cornerIndex = 0;
     for (RobotProfile.CornerConfig c : profile.corners().values()) {
-      drivePosSeries.add(
+      List<DoubleSample> akitDrivePos =
           RunAnalyzer.findDoubleSeries(
               allLogs,
               driveLog,
               List.of(
-                  "Phoenix6/TalonFX-" + c.driveMotorId() + "/Position",
-                  c.driveVelocityTopic().replace("Velocity", "Position"))));
-      steerPosSeries.add(
+                  "/Drive/Module" + cornerIndex + "/DrivePositionRad",
+                  "Drive/Module" + cornerIndex + "/DrivePositionRad",
+                  "/AdvantageKit/Drive/Module" + cornerIndex + "/DrivePositionRad"));
+      List<DoubleSample> p6DrivePos =
+          c.driveMotorId() > 0
+              ? RunAnalyzer.findDoubleSeries(
+                  allLogs,
+                  driveLog,
+                  List.of(
+                      "Phoenix6/TalonFX-" + c.driveMotorId() + "/Position",
+                      "/Phoenix6/TalonFX-" + c.driveMotorId() + "/Position"))
+              : Collections.emptyList();
+      if (!akitDrivePos.isEmpty()) {
+        drivePosSeries.add(akitDrivePos);
+        drivePosUnits.add(2);
+      } else if (!p6DrivePos.isEmpty()) {
+        drivePosSeries.add(p6DrivePos);
+        drivePosUnits.add(wheelScalePhoenix6 ? 1 : 0);
+      } else {
+        List<DoubleSample> derivedPos =
+            RunAnalyzer.findDoubleSeriesByTopic(
+                allLogs, driveLog, c.driveVelocityTopic().replace("Velocity", "Position"));
+        drivePosSeries.add(derivedPos);
+        boolean isRad = c.driveVelocityTopic().toLowerCase(Locale.ROOT).contains("rad");
+        drivePosUnits.add(isRad ? 2 : (wheelScalePhoenix6 ? 1 : 0));
+      }
+
+      List<DoubleSample> akitSteerPos =
           RunAnalyzer.findDoubleSeries(
               allLogs,
               driveLog,
               List.of(
-                  "Phoenix6/TalonFX-" + c.steerMotorId() + "/Position",
-                  "Phoenix6/CANcoder-" + c.cancoderId() + "/AbsolutePosition")));
+                  "/Drive/Module" + cornerIndex + "/TurnPositionRad",
+                  "Drive/Module" + cornerIndex + "/TurnPositionRad",
+                  "/AdvantageKit/Drive/Module" + cornerIndex + "/TurnPositionRad"));
+      if (!akitSteerPos.isEmpty()) {
+        steerPosSeries.add(akitSteerPos);
+        steerPosIsRadians.add(true);
+      } else {
+        steerPosSeries.add(
+            RunAnalyzer.findDoubleSeries(
+                allLogs,
+                driveLog,
+                List.of(
+                    "Phoenix6/TalonFX-" + c.steerMotorId() + "/Position",
+                    "/Phoenix6/TalonFX-" + c.steerMotorId() + "/Position",
+                    "Phoenix6/CANcoder-" + c.cancoderId() + "/AbsolutePosition",
+                    "/Phoenix6/CANcoder-" + c.cancoderId() + "/AbsolutePosition")));
+        steerPosIsRadians.add(false);
+      }
+      cornerIndex++;
     }
 
     List<DoubleSample> intakeVelSeries = Collections.emptyList();
@@ -860,6 +931,9 @@ public final class FuelSimEngine {
             allLogs,
             mechLog,
             List.of(
+                "/Elevator/PositionRotations",
+                "Elevator/PositionRotations",
+                "/AdvantageKit/Elevator/PositionRotations",
                 "/Elevator/PositionRot",
                 "Elevator/PositionRot",
                 "/Superstructure/ElevatorHeightMeters"));
@@ -867,7 +941,13 @@ public final class FuelSimEngine {
         RunAnalyzer.findDoubleSeries(
             allLogs,
             mechLog,
-            List.of("/ArmPivot/PositionRot", "ArmPivot/PositionRot", "/Superstructure/ArmAngleRad"));
+            List.of(
+                "/Arm/PositionRotations",
+                "Arm/PositionRotations",
+                "/AdvantageKit/Arm/PositionRotations",
+                "/ArmPivot/PositionRot",
+                "ArmPivot/PositionRot",
+                "/Superstructure/ArmAngleRad"));
     for (RobotProfile.MechMotorSpec m : profile.mechanisms()) {
       String lower = m.name().toLowerCase(Locale.ROOT);
       if (lower.contains("intake") && intakeVelSeries.isEmpty()) {
@@ -888,10 +968,11 @@ public final class FuelSimEngine {
 
     double x = startX;
     double y = startY;
-    double yaw0 = RunAnalyzer.sampleDoubleAt(yawSeries, t0Us, 0.0);
+    double yaw0Raw = RunAnalyzer.sampleDoubleAt(yawSeries, t0Us, 0.0);
+    double yaw0Deg = yawIsRadians ? Math.toDegrees(yaw0Raw) : yaw0Raw;
     double couplingRatio = 4.5;
-    double metersPerRotorRot =
-        (2.0 * Math.PI * profile.wheelRadiusMeters()) / Math.max(1.0, profile.driveGearRatio());
+    double wheelCircumferenceM = 2.0 * Math.PI * profile.wheelRadiusMeters();
+    double metersPerRotorRot = wheelCircumferenceM / Math.max(1.0, profile.driveGearRatio());
 
     double[] prevDrivePos = new double[drivePosSeries.size()];
     double[] prevSteerPos = new double[steerPosSeries.size()];
@@ -922,8 +1003,9 @@ public final class FuelSimEngine {
         y = RunAnalyzer.sampleDoubleAt(akitY, tsUs, y);
         headingRad = RunAnalyzer.sampleDoubleAt(akitRot, tsUs, Math.toRadians(startHeadingDeg));
       } else {
-        double rawYawDeg = RunAnalyzer.sampleDoubleAt(yawSeries, tsUs, yaw0);
-        double headingDeg = (rawYawDeg - yaw0) + startHeadingDeg;
+        double rawYawVal = RunAnalyzer.sampleDoubleAt(yawSeries, tsUs, yaw0Raw);
+        double rawYawDeg = yawIsRadians ? Math.toDegrees(rawYawVal) : rawYawVal;
+        double headingDeg = (rawYawDeg - yaw0Deg) + startHeadingDeg;
         headingRad = Math.toRadians(headingDeg);
 
         if (!drivePosSeries.isEmpty()) {
@@ -933,10 +1015,20 @@ public final class FuelSimEngine {
           for (int m = 0; m < nMod; m++) {
             double curDrive = RunAnalyzer.sampleDoubleAt(drivePosSeries.get(m), tsUs, prevDrivePos[m]);
             double curSteer = RunAnalyzer.sampleDoubleAt(steerPosSeries.get(m), tsUs, prevSteerPos[m]);
+            double dDrive = curDrive - prevDrivePos[m];
             double dSteer = curSteer - prevSteerPos[m];
-            double dRotor = (curDrive - prevDrivePos[m]) - (dSteer * couplingRatio);
-            double dMeters = dRotor * metersPerRotorRot;
-            double modAngleRad = 2.0 * Math.PI * curSteer;
+            int unitMode = drivePosUnits.get(m);
+            double dMeters;
+            if (unitMode == 2) {
+              dMeters = dDrive * profile.wheelRadiusMeters();
+            } else if (unitMode == 1) {
+              dMeters = dDrive * wheelCircumferenceM;
+            } else {
+              double dSteerRot = steerPosIsRadians.get(m) ? (dSteer / (2.0 * Math.PI)) : dSteer;
+              double dRotor = dDrive - (dSteerRot * couplingRatio);
+              dMeters = dRotor * metersPerRotorRot;
+            }
+            double modAngleRad = steerPosIsRadians.get(m) ? curSteer : (2.0 * Math.PI * curSteer);
             dxRob += dMeters * Math.cos(modAngleRad) / nMod;
             dyRob += dMeters * Math.sin(modAngleRad) / nMod;
             prevDrivePos[m] = curDrive;
@@ -1042,7 +1134,7 @@ public final class FuelSimEngine {
           tlIdx++;
         }
         TimelinePoint tp = !timeline.isEmpty() ? timeline.get(tlIdx) : null;
-        double vBatt = tp != null ? tp.batteryVoltage() : 12.4;
+        double vBatt = tp != null ? tp.batteryVoltage() : Double.NaN;
         double dStator = tp != null ? tp.totalDriveStatorAmps() : 0.0;
         double sRps =
             Math.abs(
